@@ -139,6 +139,10 @@ async function rawStatus(): Promise<BwStatus> {
   }
 }
 
+/** Facts only the CLI can supply, kept so an unlocked status card need not go and ask again. */
+let knownLastSync: string | undefined;
+let knownEmail: string | undefined;
+
 /**
  * The state of the vault as this server understands it.
  *
@@ -149,7 +153,23 @@ async function rawStatus(): Promise<BwStatus> {
 export async function status(): Promise<Status> {
   if (!CONFIG.bwJs) return { state: 'no_cli', idleLockMinutes: CONFIG.idleLockMinutes };
   const cfg = readConfig();
+
+  // While this server holds a working session there is nothing `bw status` can tell us that we
+  // do not already know, and asking costs a two-second process spawn on every status card.
+  if (sessionKey) {
+    return {
+      state: 'unlocked',
+      serverHost: hostOf(cfg.serverUrl),
+      email: knownEmail ?? cfg.email,
+      lastSync: knownLastSync,
+      idleLockMinutes: CONFIG.idleLockMinutes,
+      locksInSeconds: locksInSeconds(),
+    };
+  }
+
   const s = await rawStatus();
+  if (s.lastSync) knownLastSync = s.lastSync;
+  if (s.userEmail) knownEmail = s.userEmail;
   const configured = Boolean(cfg.serverUrl ?? s.serverUrl);
   const serverHost = hostOf(cfg.serverUrl ?? s.serverUrl);
   const email = s.userEmail ?? cfg.email ?? undefined;
@@ -224,6 +244,8 @@ export async function unlock(): Promise<UnlockOutcome> {
     sessionKey = key;
     lastActivity = Date.now();
     armIdleTimer();
+    knownLastSync = st.lastSync ?? knownLastSync;
+    knownEmail = st.email ?? knownEmail;
     log.audit('unlocked', { host: st.serverHost });
     return { ok: true as const };
   });
@@ -322,6 +344,8 @@ export async function login(): Promise<LoginOutcome> {
       }
       lastActivity = Date.now();
       armIdleTimer();
+      knownEmail = email;
+      knownLastSync = new Date().toISOString();
       log.audit('signed_in', { host: st.serverHost });
       return { ok: true };
     } catch (e) {
@@ -359,8 +383,10 @@ export async function sync(): Promise<string | undefined> {
   requireUnlocked();
   await bw(['sync'], { env: sessionEnv(), timeoutMs: 120_000 });
   touch();
-  const s = await rawStatus();
-  return s.lastSync ?? undefined;
+  // The sync just happened, so its time is now. Asking the CLI to confirm that would be a
+  // second process spawn to learn something already known.
+  knownLastSync = new Date().toISOString();
+  return knownLastSync;
 }
 
 /** Throws the error the tools turn into a "sign in first" reply. */

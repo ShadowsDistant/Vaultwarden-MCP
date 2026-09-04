@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BwError } from './bw.js';
-import { CONFIG } from './config.js';
+import { CONFIG, readConfig } from './config.js';
 import { clipboardAvailable, copySecret } from './clipboard.js';
 import { log } from './log.js';
 import * as pending from './pending.js';
@@ -157,6 +157,22 @@ function loadCardHtml(): string {
   }
 }
 
+/**
+ * The origin the card may load site icons from: the user's own Vaultwarden, which runs an
+ * icon service at /icons/<domain>/icon.png and is what the web vault uses. Going straight to
+ * a favicon on the site itself would tell every site in the vault that it is in the vault;
+ * the instance already knows, and it caches.
+ */
+function iconOrigin(): string | undefined {
+  const url = readConfig().serverUrl;
+  if (!url) return undefined;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Shared view builders
 // ---------------------------------------------------------------------------
@@ -180,6 +196,7 @@ async function statusView(): Promise<{ model: Record<string, unknown>; view: Sta
       status: model,
       canPrompt: dialogsAvailable(),
       canCopy: clipboardAvailable(),
+      iconBase: iconOrigin(),
     },
   };
 }
@@ -253,10 +270,17 @@ export function registerTools(server: McpServer): void {
           uri: CONFIG.uiUri,
           mimeType: RESOURCE_MIME_TYPE,
           text: loadCardHtml(),
-          // No external origins at all. The card renders vault data; it has no business
-          // reaching the network, and an allowlist of none makes exfiltration from inside
-          // the iframe impossible rather than merely unlikely.
-          _meta: { ui: { csp: { resourceDomains: [], connectDomains: [] }, prefersBorder: false } },
+          // Images may come from one origin: the user's own vault server, which proxies site
+          // icons exactly as the web vault does. Nothing else is allowed anywhere — no other
+          // image host, and `connectDomains` stays empty, so the card cannot make a request of
+          // its own to anywhere at all. The one origin it can fetch an image from is a server
+          // that already knows every item in the vault.
+          _meta: {
+            ui: {
+              csp: { resourceDomains: iconOrigin() ? [iconOrigin() as string] : [], connectDomains: [] },
+              prefersBorder: false,
+            },
+          },
         },
       ],
     }),
@@ -864,7 +888,7 @@ export function registerTools(server: McpServer): void {
       const raw = await vault.getRawItem(a.id);
       const folders = await vault.listFolders();
       const item = vault.toCardItem(raw, folders);
-      const payload = { view: 'item', itemId: item.id, item, canCopy: clipboardAvailable() };
+      const payload = { view: 'item', itemId: item.id, item, canCopy: clipboardAvailable(), iconBase: iconOrigin() };
       return ok(payload, payload);
     }),
   );
@@ -872,15 +896,22 @@ export function registerTools(server: McpServer): void {
   appTool(
     'vault_ui_search',
     'Card: search results for the list view.',
-    { query: z.string().optional(), limit: z.number().int().min(1).max(50).optional(), include_trash: z.boolean().optional() },
+    { query: z.string().optional(), limit: z.number().int().min(1).max(1000).optional(), include_trash: z.boolean().optional() },
     async (args) =>
       run('vault_ui_search', async () => {
         await requireReady();
         const a = args as unknown as { query?: string; limit?: number; include_trash?: boolean };
-        const { items, truncated } = await vault.searchItems({ search: a.query, trash: a.include_trash, limit: a.limit ?? 25 });
+        // No practical cap here. The model's own search is capped because a long list of
+        // usernames is worth something to an attacker; the card is being read by the person
+        // who owns the vault, and a list that silently stops at twenty-five is just wrong.
+        const { items, truncated, total } = await vault.searchItems({
+          search: a.query,
+          trash: a.include_trash,
+          limit: a.limit ?? 1000,
+        });
         const folders = await vault.listFolders();
         const list = items.map((i) => vault.toCardItem(i, folders));
-        const payload = { view: 'list', count: list.length, truncated, items: list };
+        const payload = { view: 'list', count: list.length, total, truncated, items: list, iconBase: iconOrigin() };
         return ok(payload, payload);
       }),
   );
@@ -1022,7 +1053,7 @@ export function registerTools(server: McpServer): void {
         });
         const folders = await vault.listFolders(true);
         const item = vault.toCardItem(created, folders);
-        const payload = { view: 'item', itemId: created.id, item, saved: true, canCopy: clipboardAvailable() };
+        const payload = { view: 'item', itemId: created.id, item, saved: true, canCopy: clipboardAvailable(), iconBase: iconOrigin() };
         return ok(payload, payload);
       }),
   );
@@ -1037,7 +1068,7 @@ export function registerTools(server: McpServer): void {
         const saved = await vault.editItem(action.itemId, action.payload as vault.ItemPatch);
         const folders = await vault.listFolders();
         const item = vault.toCardItem(saved, folders);
-        const payload = { view: 'item', itemId: saved.id, item, saved: true, canCopy: clipboardAvailable() };
+        const payload = { view: 'item', itemId: saved.id, item, saved: true, canCopy: clipboardAvailable(), iconBase: iconOrigin() };
         return ok(payload, payload);
       }
       if (action.kind === 'delete' && action.itemId) {
@@ -1062,9 +1093,27 @@ export function registerTools(server: McpServer): void {
     run('vault_ui_unlock', async () => {
       const before = await session.status();
       const r = before.state === 'unauthenticated' ? await session.login() : await session.unlock();
-      const { view } = await statusView();
-      if (!r.ok) return ok({ ...view, error: r.reason }, { ...view, error: r.reason });
-      return ok(view, view);
+      if (!r.ok) {
+        const { view } = await statusView();
+        return ok({ ...view, error: r.reason }, { ...view, error: r.reason });
+      }
+      // Unlocking is not the goal — getting at the vault is. Landing back on a card that says
+      // "your vault is open" and nothing else means typing the master password and then having
+      // to ask again for the thing you were already after. The list is already in memory from
+      // the decrypt that proved the unlock worked, so this costs one call, not a wait.
+      const { items, total, truncated } = await vault.searchItems({ limit: 1000 });
+      const folders = await vault.listFolders();
+      const list = items.map((i) => vault.toCardItem(i, folders));
+      const payload = {
+        view: 'list',
+        unlocked: true,
+        count: list.length,
+        total,
+        truncated,
+        items: list,
+        iconBase: iconOrigin(),
+      };
+      return ok(payload, payload);
     }),
   );
 

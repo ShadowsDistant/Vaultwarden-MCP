@@ -142,8 +142,20 @@ test('activity postpones the idle lock', async (t) => {
   assert.equal((await s.callJson('vault_status')).json.data.state, 'unlocked');
 });
 
-test('status counts down to the automatic lock', async (t) => {
+test('by default the vault stays open until the process ends', async (t) => {
+  // No idle timer: the session dies with this process, which is when Claude Desktop closes.
+  // An idle lock that fires mid-conversation is a password prompt in the middle of something.
   const s = await unlocked();
+  t.after(() => s.close());
+
+  const { json } = await s.callJson('vault_status');
+  assert.equal(json.data.state, 'unlocked');
+  assert.equal(json.data.autoLockMinutes, undefined);
+  assert.equal(json.data.locksInSeconds, undefined);
+});
+
+test('an idle lock is still available for anyone who wants one', async (t) => {
+  const s = await unlocked({ env: { VW_MCP_IDLE_LOCK_MIN: '15' } });
   t.after(() => s.close());
 
   const { json } = await s.callJson('vault_status');
@@ -226,7 +238,7 @@ test('the server reports what it is and what it is for', async (t) => {
   assert.match(instructions, /until they press Save or Confirm, nothing has happened/i);
 });
 
-test('the card resource is served with no external origins allowed', async (t) => {
+test('the card may reach exactly one origin, and it is the vault itself', async (t) => {
   const s = await unlocked();
   t.after(() => s.close());
 
@@ -238,9 +250,21 @@ test('the card resource is served with no external origins allowed', async (t) =
   const read = await s.client.readResource({ uri: 'ui://vaultwarden/card.html' });
   const body = read.contents[0];
   assert.equal(body.mimeType, 'text/html;profile=mcp-app');
-  // A card that renders vault data has no business reaching the network.
-  assert.deepEqual(body._meta.ui.csp.resourceDomains, []);
+
+  // Site icons come from the user's own instance, which already holds every one of these
+  // items. No other origin may serve this card anything.
+  assert.deepEqual(body._meta.ui.csp.resourceDomains, ['https://vault.example.com']);
+  // And it still cannot make a request of its own, to anywhere.
   assert.deepEqual(body._meta.ui.csp.connectDomains, []);
+
   assert.ok(body.text.includes('<style>'), 'the card should be a complete document');
-  assert.ok(!/\bsrc\s*=\s*["']https?:/i.test(body.text), 'the card must not load anything remotely');
+  assert.ok(!/\bsrc\s*=\s*["']https?:/i.test(body.text), 'the card must not hard-code a remote source');
+});
+
+test('with no instance configured the card gets no origins at all', async (t) => {
+  const s = await unlocked({ env: { VW_MCP_SERVER_URL: '' } });
+  t.after(() => s.close());
+
+  const read = await s.client.readResource({ uri: 'ui://vaultwarden/card.html' });
+  assert.deepEqual(read.contents[0]._meta.ui.csp.resourceDomains, []);
 });

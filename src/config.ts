@@ -53,8 +53,13 @@ export const CONFIG = {
   nodeExe: process.env.VW_MCP_NODE_PATH ?? process.execPath,
   configFile: path.join(home, 'config.json'),
   logFile: process.env.VW_MCP_LOG_FILE ?? path.join(home, 'logs', 'server.log'),
-  /** Minutes of inactivity before the vault is locked. 0 disables. */
-  idleLockMinutes: num('VW_MCP_IDLE_LOCK_MIN', 15),
+  /**
+   * Minutes of inactivity before the vault locks. 0 means it does not lock on a timer — it
+   * closes when this process does, which is when Claude Desktop quits. That is the default
+   * because an idle timer that fires mid-conversation is a password prompt in the middle of
+   * something, and the session never outlives the app either way.
+   */
+  idleLockMinutes: num('VW_MCP_IDLE_LOCK_MIN', 0),
   /** `ask` = a native Yes/No dialog for every model-visible reveal; `off` = always refuse. */
   revealMode: ((): RevealMode => (process.env.VW_MCP_MODEL_REVEAL ?? 'ask').trim().toLowerCase() === 'off' ? 'off' : 'ask')(),
   /** Allow a plain-http server URL for hosts other than localhost. */

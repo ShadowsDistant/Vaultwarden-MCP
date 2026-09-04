@@ -130,8 +130,8 @@ const manifest = {
     idle_lock_minutes: {
       type: 'number',
       title: 'Lock after (minutes of inactivity)',
-      description: 'The vault locks itself after this long with nothing happening. Set 0 to never lock automatically.',
-      default: 15,
+      description: 'Leave at 0 to lock only when Claude Desktop closes, which is the default. Set a number of minutes to also lock after that long with nothing happening.',
+      default: 0,
       required: false,
     },
     model_reveal: {

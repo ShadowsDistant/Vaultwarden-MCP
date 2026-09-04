@@ -48,6 +48,12 @@ value at all: the server writes it straight to your clipboard and clears it thir
 tagged so Windows clipboard history and cloud clipboard skip it. Items you marked "master password
 re-prompt" ask for your password again before either.
 
+Site icons come from your own instance's icon service, the same one the web vault uses, and it is
+the only origin the card is allowed to load anything from. An item with no icon shows its initial.
+
+The vault stays unlocked until Claude Desktop closes. Set `VW_MCP_IDLE_LOCK_MIN` if you also want
+it to lock after a stretch of inactivity.
+
 ## Requirements
 
 - **Node 20 or newer.** The Bitwarden CLI ships inside this package; nothing else to install.
@@ -101,7 +107,7 @@ Set through the extension's settings in Claude Desktop, or as environment variab
 | ----------------------- | -------------------- | ------------------------------------------------------------------------------- |
 | `VW_MCP_SERVER_URL`     | —                    | Your vault address. Required, and deliberately not settable from a conversation. |
 | `VW_MCP_EMAIL`          | —                    | Pre-fills the sign-in window.                                                    |
-| `VW_MCP_IDLE_LOCK_MIN`  | `15`                 | Lock the vault after this many idle minutes. `0` never locks automatically.      |
+| `VW_MCP_IDLE_LOCK_MIN`  | `0`                  | Also lock after this many idle minutes. `0` locks only when Claude Desktop closes. |
 | `VW_MCP_MODEL_REVEAL`   | `ask`                | `ask` allows a reveal after you approve it in a window; `off` refuses outright.  |
 | `VW_MCP_HOME`           | `~/.vaultwarden-mcp` | Where the vault cache, config, and log live.                                     |
 | `VW_MCP_CA_FILE`        | —                    | A CA bundle, if your instance uses a private certificate authority.              |
@@ -141,7 +147,7 @@ exist, so nothing can call them.
 ```bash
 npm install --legacy-peer-deps
 npm run build          # tsc, then bundle the card into one HTML file
-npm test               # 73 tests against a fake Bitwarden CLI, over real stdio
+npm test               # 81 tests against a fake Bitwarden CLI, over real stdio
 npm run preview        # the card's views at http://localhost:8766, and /selftest.html
 ```
 
@@ -186,7 +192,7 @@ is up. If it uses a private certificate authority, point `VW_MCP_CA_FILE` at the
 **Claude says an item was created but it is not there.** It was a draft. Nothing is written until
 you press Save in the card. If the card did not appear, your host does not support MCP Apps.
 
-**The vault keeps locking.** Raise `VW_MCP_IDLE_LOCK_MIN`, or set it to `0`.
+**The vault keeps locking.** By default it stays open until Claude Desktop closes. If you set `VW_MCP_IDLE_LOCK_MIN`, raise it or set it back to `0`.
 
 ## Licence
 

@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.2.0 — 2026-09-04
+
+### The reveal button did nothing
+
+A real bug, and an instructive one. A secret is deliberately kept out of `structuredContent`,
+since that field is assumed to be model-visible — so the value travelled in `content` alone.
+The card read `structuredContent` and stopped there, found no value, and showed an error. The
+server had done the work; the card threw it away.
+
+The card now merges both halves of a result. A new test asserts exactly this for the reveal
+path: absent from `structuredContent`, present to a card that reads both. The old test passed
+throughout, because it read the text half — the half the card was ignoring.
+
+### Unlocking takes you into the vault
+
+Unlocking left you on a card that said "your vault is open" and nothing else, so getting at a
+password meant asking again for what you were already after. Unlocking from the card now shows
+the vault. The list is already in memory from the decrypt that proves the unlock worked, so it
+costs nothing extra. The unlocked status card also grew an **Open vault** button.
+
+### The vault stays open until Claude Desktop closes
+
+That is now the default: `VW_MCP_IDLE_LOCK_MIN` is `0`, and the session ends with the process.
+An idle timer that fires mid-conversation is a password prompt in the middle of something. Set
+the variable to a number of minutes if you want the old behaviour as well.
+
+### Site icons
+
+The card shows each item's site icon, from your own instance's icon service — the same one the
+web vault uses, and the only origin the card is allowed to load anything from. An item with no
+icon keeps its initial, and a request that fails leaves the initial showing rather than a
+broken-image mark. The card still cannot make a request of its own to anywhere.
+
+### The whole vault, in a sensible order
+
+The card's list was capped at twenty-five. It now shows everything, sorted favourites-first
+then alphabetically, with a count that reflects the real total. The model's own search stays
+capped at fifty: a long list of usernames is worth something to an attacker, and the person
+reading the card is not the threat.
+
+Searching also matches the way a search box is expected to — any word, anywhere, any case —
+rather than deferring to the CLI's narrower matching.
+
+### Faster again
+
+The remaining cost was `bw list items` at about four seconds, paid on every search. The whole
+vault is now fetched once and filtered in memory, which also populates the per-item cache, so
+after unlocking there is nothing left to fetch. `bw status` is no longer called at all while a
+session is held; the status card was paying two seconds for facts this server already knew.
+Caches last five minutes now that the vault stays unlocked, and are emptied on every write, on
+sync, and the instant the vault locks.
+
 ## 0.1.1 — 2026-09-04
 
 Cards behaved badly in two ways that were obvious in use and invisible in the tests.

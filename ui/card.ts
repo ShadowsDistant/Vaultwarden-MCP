@@ -64,6 +64,9 @@ type Payload = {
   message?: string;
   meta?: Record<string, unknown>;
   options?: Record<string, unknown>;
+  iconBase?: string;
+  total?: number;
+  unlocked?: boolean;
   saved?: boolean;
   error?: string;
   hint?: string;
@@ -284,16 +287,30 @@ function notifySize(): void {
 
 type ToolResult = { content?: { type: string; text?: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 
+/**
+ * Both halves of a tool result, merged.
+ *
+ * Reading only `structuredContent` silently broke the reveal button: a secret is deliberately
+ * kept out of `structuredContent` — that field is assumed to be model-visible — so the value
+ * lives in `content` alone, and the card found nothing there to show. Anything the server
+ * puts in either half is now visible to the card, with the structured half winning where they
+ * overlap, since that is the one shaped for rendering.
+ */
 function parse(result: ToolResult): Payload & Record<string, unknown> {
-  if (result.structuredContent && Object.keys(result.structuredContent).length) {
-    return result.structuredContent as Payload;
-  }
   const text = result.content?.find((c) => c.type === 'text')?.text ?? '';
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { error: text || 'empty result' };
+  let fromText: Record<string, unknown> = {};
+  if (text) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) fromText = parsed as Record<string, unknown>;
+    } catch {
+      // A tool that failed before it could produce JSON: the text is the message.
+      return { error: text };
+    }
   }
+  const structured = (result.structuredContent ?? {}) as Record<string, unknown>;
+  if (!text && !Object.keys(structured).length) return { error: 'empty result' };
+  return { ...fromText, ...structured } as Payload & Record<string, unknown>;
 }
 
 /** One call at a time, queued rather than dropped: a dropped click looks like a bug. */
@@ -341,6 +358,53 @@ function initial(name: string | undefined): string {
   const s = (name ?? '?').trim();
   const ch = [...s][0];
   return (ch ?? '?').toUpperCase();
+}
+
+/** Where site icons come from, as the server most recently reported it. */
+let iconBase: string | undefined;
+
+/**
+ * The site icon for an item, or nothing.
+ *
+ * The URL is built from the vault's own instance plus a host taken from the item, so the only
+ * place a request can go is the server that already holds every one of these items. The host
+ * is checked against a strict pattern first — vault content decides this path, and a value
+ * shaped like anything other than a hostname simply does not get one.
+ */
+function iconUrl(it: Item): string | undefined {
+  if (!iconBase) return undefined;
+  const first = (it.uris ?? it.sites ?? [])[0];
+  if (!first) return undefined;
+  let host: string;
+  try {
+    host = new URL(first.includes('://') ? first : `https://${first}`).hostname;
+  } catch {
+    return undefined;
+  }
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(host)) return undefined;
+  return `${iconBase}/icons/${encodeURIComponent(host)}/icon.png`;
+}
+
+/**
+ * An item's avatar: its site icon where there is one, its initial where there is not.
+ *
+ * The icon is layered over the letter rather than replacing it, so a request that fails —
+ * offline, no icon for that domain, icons disabled on the instance — leaves the letter
+ * showing instead of a broken-image mark.
+ */
+function avatar(it: Item, cls: string): HTMLElement {
+  const wrap = el('div', cls, initial(it.name));
+  const src = iconUrl(it);
+  if (!src) return wrap;
+  const img = el('img', 'favicon');
+  img.alt = '';
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  img.addEventListener('load', () => img.classList.add('shown'));
+  img.addEventListener('error', () => img.remove());
+  img.src = src;
+  wrap.append(img);
+  return wrap;
 }
 
 function hostOf(uri: string): string {
@@ -492,7 +556,8 @@ function renderStatus(p: Payload): Node {
     hintLine.style.alignSelf = 'center';
     actions.append(hintLine);
   } else if (st.state === 'unlocked') {
-    actions.append(button('Lock now', '', () => act('vault_ui_lock'), 'lock', 'Locking'));
+    actions.append(button('Open vault', 'primary', () => act('vault_ui_search'), 'unlock', 'Loading'));
+    actions.append(button('Lock now', 'ghost', () => act('vault_ui_lock'), 'lock', 'Locking'));
     actions.append(button('Sync', 'ghost', () => act('vault_ui_sync'), 'sync', 'Syncing'));
   }
   if (actions.childElementCount) out.append(actions);
@@ -502,10 +567,12 @@ function renderStatus(p: Payload): Node {
 function renderList(p: Payload): Node {
   const items = p.items ?? [];
   const out = frag();
+  const total = typeof p.total === 'number' ? p.total : items.length;
   out.append(
     header(
-      items.length === 1 ? '1 match' : `${items.length} matches`,
-      p.truncated ? 'showing the first results' : undefined,
+      total === 1 ? '1 item' : `${total} items`,
+      p.truncated ? `showing the first ${items.length}` : p.unlocked ? 'vault unlocked' : undefined,
+      p.unlocked ? { text: 'Unlocked', cls: 'ok' } : undefined,
     ),
   );
   if (!items.length) {
@@ -516,7 +583,7 @@ function renderList(p: Payload): Node {
   for (const it of items) {
     const row = el('button', 'list-row');
     row.type = 'button';
-    row.append(el('div', 'list-avatar', initial(it.name)));
+    row.append(avatar(it, 'list-avatar'));
     const col = el('div', 'col grow');
     col.append(el('div', 'list-name truncate', it.name ?? 'Untitled'));
     const sub = [it.username, (it.uris ?? it.sites ?? []).map(hostOf)[0]].filter(Boolean).join(' · ');
@@ -567,7 +634,7 @@ function renderItem(p: Payload): Node {
   out.append(header(it.inTrash ? 'In the trash' : 'Vault item', it.folder ?? undefined, p.saved ? { text: 'Saved', cls: 'ok' } : undefined));
 
   const ident = el('div', 'pad row');
-  ident.append(el('div', 'avatar', initial(it.name)));
+  ident.append(avatar(it, 'avatar'));
   const col = el('div', 'col grow');
   col.append(el('div', 'name truncate', it.name ?? 'Untitled'));
   const metaBits: string[] = [];
@@ -1124,6 +1191,7 @@ function showError(message: string): void {
 
 function render(p: Payload): void {
   clearRenderTimers();
+  if (typeof p.iconBase === 'string') iconBase = p.iconBase;
   current = p;
   let node: Node;
   if (p.error && !p.view) {
@@ -1331,11 +1399,13 @@ function demoPayload(kind: string): Payload {
   };
   switch (kind) {
     case 'item':
-      return { view: 'item', itemId: item.id, item, canCopy: true };
+      return { view: 'item', itemId: item.id, item, canCopy: true, iconBase: 'https://bitwarden.pikapod.net' };
     case 'list':
       return {
         view: 'list',
+        iconBase: 'https://bitwarden.pikapod.net',
         count: 4,
+        total: 4,
         items: [
           item,
           { id: 'a', name: 'Proton Mail', username: 'shado@proton.me', uris: ['https://account.proton.me'], hasPassword: true },
@@ -1388,6 +1458,7 @@ function demoPayload(kind: string): Payload {
       return { view: 'status', status: { state: 'unconfigured' } };
     default:
       return {
+        iconBase: 'https://bitwarden.pikapod.net',
         view: 'status',
         status: {
           state: 'unlocked',

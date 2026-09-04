@@ -72,8 +72,9 @@ Consequences worth stating plainly:
 - The window names the account and the instance, so you can tell what you are unlocking.
 - Windows are single-flight and capped at five in ten minutes, so a model looping on `vault_unlock`
   cannot stack prompts until one is clicked out of fatigue.
-- The session key lives in memory only. It is dropped on lock, on `VW_MCP_IDLE_LOCK_MIN` minutes of
-  inactivity (15 by default), and when the process ends.
+- The session key lives in memory only. It is dropped on lock, when the process ends — which is
+  when Claude Desktop closes — and after `VW_MCP_IDLE_LOCK_MIN` idle minutes if you set one. It is
+  never written to disk, so it cannot outlive the process whatever happens.
 
 ### 4. The vault address cannot be reached from a conversation
 
@@ -117,6 +118,9 @@ hijacking it for.
   the vault key.
 - **Vault data lives at `~/.vaultwarden-mcp`**, outside OneDrive and outside the AppData path that
   Claude Desktop's MSIX packaging redirects.
+- **Decrypted items are cached in memory for twenty seconds** so that opening an item and then
+  revealing its password does not pay for two CLI invocations. The cache is emptied the instant the
+  vault locks and on every write. It holds nothing the session key could not already produce.
 - **Nothing secret is logged.** Items appear in the log by id, never by name — the log is a
   plaintext file that outlives the session, and Claude Desktop keeps a copy of the server's stderr.
 - **Clipboard copies are tagged** with the formats that exclude them from Windows clipboard history

@@ -1,6 +1,6 @@
 {
   "name": "vaultwarden-mcp",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "MCP server for a self-hosted Vaultwarden vault, driven through the official Bitwarden CLI. Secrets never reach the model.",

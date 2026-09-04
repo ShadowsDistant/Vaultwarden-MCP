@@ -72,7 +72,7 @@ let folderCache: { at: number; folders: BwFolder[] } | null = null;
 
 export async function listFolders(force = false): Promise<BwFolder[]> {
   requireUnlocked();
-  if (!force && folderCache && Date.now() - folderCache.at < 60_000) return folderCache.folders;
+  if (!force && folderCache && Date.now() - folderCache.at < 5 * 60_000) return folderCache.folders;
   const raw = await bw<BwFolder[]>(['list', 'folders'], { env: sessionEnv() });
   const folders = Array.isArray(raw) ? raw : [];
   folderCache = { at: Date.now(), folders };
@@ -139,15 +139,22 @@ export function toCardItem(item: BwItem, folders: BwFolder[]): CardItem {
  * costs the better part of four seconds. Without this, opening an item and then revealing its
  * password pays that twice, and the second click looks like a button that does nothing.
  *
- * The entries hold real secrets, so: a short life, and emptied the moment the vault locks or
- * anything is written. That is the same memory that already holds the session key, so it adds
- * no new exposure — but it is worth keeping small and brief regardless.
+ * The entries hold real secrets, so they are emptied the moment the vault locks or anything is
+ * written. That is the same memory that already holds the session key, so this adds no new
+ * exposure: anything in here is something the key could reproduce on demand.
+ *
+ * The lifetime is minutes rather than seconds because the vault now stays unlocked for as long
+ * as the app is open, and the contents only change when this server writes to them or a sync
+ * pulls something new — both of which empty the cache explicitly. The cost of guessing wrong is
+ * a few minutes of staleness against a vault edited somewhere else, and the Sync button is
+ * there for exactly that.
  */
-const ITEM_CACHE_MS = 20_000;
+const ITEM_CACHE_MS = 5 * 60_000;
 const itemCache = new Map<string, { at: number; item: BwItem }>();
 
 export function invalidateCache(): void {
   itemCache.clear();
+  listCache.clear();
   folderCache = null;
 }
 
@@ -176,16 +183,70 @@ export type SearchQuery = {
   limit: number;
 };
 
-export async function searchItems(q: SearchQuery): Promise<{ items: BwItem[]; truncated: boolean }> {
-  requireUnlocked();
+/**
+ * The whole vault, fetched once and filtered here.
+ *
+ * `bw list items --search foo` costs a four-second process spawn, and the card runs a search
+ * every time someone goes back to the results. Fetching everything once and filtering in
+ * memory turns every search after the first into no CLI call at all, and it is also the only
+ * way to reliably show the complete list: the CLI's own `--search` is a narrower match than
+ * people expect.
+ *
+ * Held under the same rules as the item cache — short, and dropped the moment the vault locks.
+ */
+const LIST_CACHE_MS = 5 * 60_000;
+const listCache = new Map<'live' | 'trash', { at: number; items: BwItem[] }>();
+
+async function allItems(trash: boolean, fresh = false): Promise<BwItem[]> {
+  const key = trash ? 'trash' : 'live';
+  const hit = listCache.get(key);
+  if (!fresh && hit && Date.now() - hit.at < LIST_CACHE_MS) return hit.items;
   const args = ['list', 'items'];
-  if (q.search) args.push('--search', q.search);
-  if (q.url) args.push('--url', q.url);
-  if (q.folderId) args.push('--folderid', q.folderId);
-  if (q.trash) args.push('--trash');
+  if (trash) args.push('--trash');
   const raw = await bw<BwItem[]>(args, { env: sessionEnv(), timeoutMs: 60_000 });
-  const all = Array.isArray(raw) ? raw : [];
-  return { items: all.slice(0, q.limit), truncated: all.length > q.limit };
+  const items = Array.isArray(raw) ? raw : [];
+  listCache.set(key, { at: Date.now(), items });
+  // Every item arrived decrypted, so the per-item cache gets them for free.
+  for (const item of items) if (item?.id) itemCache.set(item.id, { at: Date.now(), item });
+  return items;
+}
+
+/** Matches the way a person expects a search box to behave: any word, anywhere, any case. */
+function matches(item: BwItem, needle: string): boolean {
+  const hay = [
+    item.name,
+    item.login?.username,
+    ...(item.login?.uris ?? []).map((u) => u?.uri ?? ''),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return needle
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => hay.includes(word));
+}
+
+export async function searchItems(q: SearchQuery): Promise<{ items: BwItem[]; truncated: boolean; total: number }> {
+  requireUnlocked();
+  let items = await allItems(Boolean(q.trash));
+  if (q.search) items = items.filter((i) => matches(i, q.search as string));
+  if (q.url) {
+    const needle = q.url.toLowerCase();
+    items = items.filter((i) => (i.login?.uris ?? []).some((u) => String(u?.uri ?? '').toLowerCase().includes(needle)));
+  }
+  if (q.folderId) items = items.filter((i) => i.folderId === q.folderId);
+
+  // Favourites first, then alphabetical — the order the web vault uses, and the one that makes
+  // a long list navigable.
+  items = [...items].sort((a, b) => {
+    if (Boolean(a.favorite) !== Boolean(b.favorite)) return a.favorite ? -1 : 1;
+    return String(a.name ?? '').localeCompare(String(b.name ?? ''), undefined, { sensitivity: 'base' });
+  });
+
+  const total = items.length;
+  return { items: items.slice(0, q.limit), truncated: total > q.limit, total };
 }
 
 export type SecretField = 'password' | 'totp' | 'notes';

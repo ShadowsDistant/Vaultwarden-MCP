@@ -249,6 +249,23 @@
     display: grid; place-items: center; font-size: 12px; font-weight: 600;
     border: 1px solid var(--accent-line);
   }
+  /* The site icon sits over the initial rather than instead of it, so a request that fails —
+     offline, no icon for that domain, icons switched off on the instance — leaves the letter
+     showing rather than a broken-image mark. It only becomes visible once it has loaded. */
+  .avatar, .list-avatar { position: relative; overflow: hidden; }
+  .favicon {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    padding: 18%;
+    background: var(--bg);
+    opacity: 0;
+    transition: opacity .15s ease;
+  }
+  .favicon.shown { opacity: 1; }
+
   .list-name { font-size: 13px; font-weight: 500; }
   .list-sub { font-size: 11.5px; color: var(--faint); }
   .chev { color: var(--faint); flex: none; }
