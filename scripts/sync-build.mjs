@@ -35,7 +35,30 @@ const lock = path.join(root, 'package-lock.json');
 if (fs.existsSync(lock)) fs.copyFileSync(lock, path.join(build, 'package-lock.json'));
 console.error(`sync: ${root} -> ${build}`);
 
-const npmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+/**
+ * Where npm's CLI actually lives.
+ *
+ * It is not next to the node binary on every platform: a Linux tarball install (which is
+ * what CI uses) keeps it under lib/node_modules, while a Windows install keeps it beside
+ * node.exe. npm itself sets npm_execpath when it runs a script, so that is checked first and
+ * is right whenever this was started by `npm run`. Calling the npm shim by name instead
+ * would need a shell, which is exactly what the malformed PATH on some Windows machines
+ * breaks.
+ */
+function findNpmCli() {
+  if (process.env.npm_execpath && fs.existsSync(process.env.npm_execpath)) return process.env.npm_execpath;
+  const nodeDir = path.dirname(process.execPath);
+  const candidates = [
+    path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    path.join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    path.join(nodeDir, '..', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ];
+  const found = candidates.find((p) => fs.existsSync(p));
+  if (!found) throw new Error('Could not find npm. Run this through `npm run`, or install npm alongside node.');
+  return found;
+}
+
+const npmCli = findNpmCli();
 
 // This machine's system PATH contains an unbalanced quote. cmd.exe expands %PATH% while
 // parsing, so any batch file npm shells out to dies with "operable program or batch file"

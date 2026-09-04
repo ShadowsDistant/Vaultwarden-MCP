@@ -405,7 +405,15 @@ export function registerTools(server: McpServer): void {
         // genuinely useful thing for an attacker to talk the model into fetching.
         const list = items.map((i) => vault.toModelItem(i, folders, s));
         const data = { count: list.length, truncated, items: list };
-        return ok(envelope(data, s.warnings), { view: 'list', ...data });
+        // The query travels to the card so it can re-run the search through its own tool and
+        // show the fuller view. It is the model's own input coming back, so nothing is
+        // disclosed by including it.
+        return ok(envelope(data, s.warnings), {
+          view: 'list',
+          ...data,
+          query: args.query,
+          includeTrash: args.include_trash,
+        });
       }),
   );
 

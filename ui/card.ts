@@ -47,6 +47,8 @@ type Payload = {
   items?: Item[];
   count?: number;
   truncated?: boolean;
+  query?: string;
+  includeTrash?: boolean;
   draftId?: string;
   actionId?: string;
   kind?: string;
@@ -1052,7 +1054,28 @@ app.ontoolinput = () => {
 
 app.ontoolresult = (params) => {
   toolPending = false;
-  render(parse(params as ToolResult));
+  const payload = parse(params as ToolResult);
+  render(payload);
+
+  // What arrived is the model's view of the item: names screened for instruction-like text,
+  // URLs cut back to their host, usernames withheld from a bulk search. That is right for the
+  // model and wrong for a person, who should see the item as they wrote it. So the card
+  // paints that immediately and then asks for its own fuller version.
+  if (payload.view === 'item' && payload.itemId) {
+    void (async () => {
+      const full = await call('vault_ui_item', { id: payload.itemId });
+      if (!full.error && current.itemId === payload.itemId) render(full);
+    })();
+  } else if (payload.view === 'list' && payload.query !== undefined) {
+    void (async () => {
+      const full = await call('vault_ui_search', {
+        query: payload.query,
+        include_trash: payload.includeTrash,
+        limit: payload.items?.length ?? 25,
+      });
+      if (!full.error && current.view === 'list') render(full);
+    })();
+  }
 };
 
 app.ontoolcancelled = () => {
