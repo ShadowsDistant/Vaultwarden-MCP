@@ -131,6 +131,7 @@ export async function startServer({ env = {}, seed = true, seedState = {}, cards
 
   const clipFile = path.join(home, 'clipboard.txt');
   const promptLog = path.join(home, 'prompts.log');
+  const callLog = path.join(home, 'bw-calls.log');
 
   const childEnv = {
     // A minimal base: the server must not depend on anything inherited.
@@ -156,7 +157,7 @@ export async function startServer({ env = {}, seed = true, seedState = {}, cards
     FAKE_PROMPT_PASSWORD: MASTER_PASSWORD,
     FAKE_PROMPT_EMAIL: 'shado@example.com',
     ...env,
-    VW_MCP_BW_ENV: JSON.stringify(bwEnvFor(env)),
+    VW_MCP_BW_ENV: JSON.stringify({ FAKE_BW_CALL_LOG: callLog, ...bwEnvFor(env) }),
   };
 
   const transport = new StdioClientTransport({
@@ -183,6 +184,21 @@ export async function startServer({ env = {}, seed = true, seedState = {}, cards
         return fs.readFileSync(clipFile, 'utf8');
       } catch {
         return '';
+      }
+    },
+    /** Every CLI invocation so far, as "command object" lines. */
+    bwCalls: () => {
+      try {
+        return fs.readFileSync(callLog, 'utf8').split('\n').filter(Boolean);
+      } catch {
+        return [];
+      }
+    },
+    resetBwCalls: () => {
+      try {
+        fs.writeFileSync(callLog, '');
+      } catch {
+        /* nothing logged yet */
       }
     },
     prompts: () => {

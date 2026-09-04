@@ -143,22 +143,88 @@ const ICONS = {
   plus: ['M12 5.5v13', 'M5.5 12h13'],
 };
 
-function iconButton(kind: keyof typeof ICONS, label: string, onClick: () => void): HTMLButtonElement {
+/**
+ * A button that shows it is working.
+ *
+ * Every one of these ends in a call to the Bitwarden CLI, which spawns a process and can take
+ * a few seconds. Without a spinner the card sits there looking identical to before the click,
+ * so the button reads as broken and gets pressed again — and the log fills with the same
+ * reveal three times over. `onClick` may return a promise; the spinner lasts as long as it
+ * does.
+ */
+function iconButton(kind: keyof typeof ICONS, label: string, onClick: () => void | Promise<unknown>): HTMLButtonElement {
   const b = el('button', 'icon-btn');
   b.type = 'button';
   b.title = label;
   b.setAttribute('aria-label', label);
   b.append(icon(ICONS[kind]));
-  b.addEventListener('click', onClick);
+  b.addEventListener('click', () => {
+    if (b.classList.contains('working')) return;
+    const done = onClick();
+    if (!done || typeof (done as Promise<unknown>).finally !== 'function') return;
+    const restore = b.firstChild;
+    b.classList.add('working');
+    b.replaceChildren(spinner());
+    void (done as Promise<unknown>).finally(() => {
+      b.classList.remove('working');
+      // A handler that repainted the card left this button detached; there is nothing to
+      // restore it to, and doing so would resurrect a node nobody can see.
+      if (b.isConnected && restore) b.replaceChildren(restore);
+    });
+  });
   return b;
 }
 
-function button(label: string, cls: string, onClick: () => void, iconKind?: keyof typeof ICONS): HTMLButtonElement {
+/** A small indeterminate ring, sized like the icon it replaces. */
+function spinner(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('aria-label', 'Working');
+  svg.classList.add('spin');
+  const track = document.createElementNS(SVG_NS, 'circle');
+  track.setAttribute('cx', '12');
+  track.setAttribute('cy', '12');
+  track.setAttribute('r', '8.5');
+  track.setAttribute('stroke', 'currentColor');
+  track.setAttribute('stroke-width', '2.2');
+  track.setAttribute('opacity', '0.25');
+  const arc = document.createElementNS(SVG_NS, 'path');
+  arc.setAttribute('d', 'M12 3.5a8.5 8.5 0 0 1 8.5 8.5');
+  arc.setAttribute('stroke', 'currentColor');
+  arc.setAttribute('stroke-width', '2.2');
+  arc.setAttribute('stroke-linecap', 'round');
+  svg.append(track, arc);
+  return svg;
+}
+
+function button(
+  label: string,
+  cls: string,
+  onClick: () => void | Promise<unknown>,
+  iconKind?: keyof typeof ICONS,
+  busyLabel?: string,
+): HTMLButtonElement {
   const b = el('button', `btn ${cls}`);
   b.type = 'button';
-  if (iconKind) b.append(icon(ICONS[iconKind]));
-  b.append(document.createTextNode(label));
-  b.addEventListener('click', onClick);
+  const paint = (text: string, glyph?: Node): void => {
+    b.replaceChildren();
+    if (glyph) b.append(glyph);
+    b.append(document.createTextNode(text));
+  };
+  paint(label, iconKind ? icon(ICONS[iconKind]) : undefined);
+  b.addEventListener('click', () => {
+    if (b.hasAttribute('disabled')) return;
+    const done = onClick();
+    if (!done || typeof (done as Promise<unknown>).finally !== 'function') return;
+    b.setAttribute('disabled', 'true');
+    paint(busyLabel ?? label, spinner());
+    void (done as Promise<unknown>).finally(() => {
+      if (!b.isConnected) return;
+      b.removeAttribute('disabled');
+      paint(label, iconKind ? icon(ICONS[iconKind]) : undefined);
+    });
+  });
   return b;
 }
 
@@ -349,21 +415,49 @@ function renderStatus(p: Payload): Node {
   const info = map[st.state] ?? map.unconfigured;
 
   const out = frag();
-  out.append(header('Vault', st.server ?? 'No server set', { text: info.pill, cls: info.cls }));
+  const head = header('Vault', st.server ?? 'No server set', { text: info.pill, cls: info.cls });
+  const pill = head.querySelector('.pill') as HTMLElement | null;
+  out.append(head);
 
   const main = el('div', 'pad row');
   const glyph = el('div', 'avatar');
   glyph.append(icon(st.state === 'unlocked' ? ICONS.unlock : ICONS.lock));
   main.append(glyph);
   const col = el('div', 'col grow');
-  col.append(el('div', 'name', info.line));
-  const bits: string[] = [];
-  if (st.email) bits.push(st.email);
-  if (st.state === 'unlocked' && st.lastSync) bits.push(`synced ${ago(st.lastSync)}`);
-  if (st.state === 'unlocked' && st.locksInSeconds !== undefined && st.autoLockMinutes) {
-    bits.push(`locks in ${Math.ceil(st.locksInSeconds / 60)} min`);
-  }
-  if (bits.length) col.append(el('div', 'sub truncate', bits.join(' · ')));
+  const headline = el('div', 'name', info.line);
+  col.append(headline);
+  const sub = el('div', 'sub truncate');
+  col.append(sub);
+
+  // The countdown is arithmetic on the number this card was handed, not a question asked
+  // again. When it runs out the card says so on its own — which is the truth, since the
+  // server locks on the same clock — and still nothing was polled to find out.
+  const paintSub = (): void => {
+    const bits: string[] = [];
+    if (st.email) bits.push(st.email);
+    if (st.state === 'unlocked' && st.lastSync) bits.push(`synced ${ago(st.lastSync)}`);
+    if (st.state === 'unlocked' && st.autoLockMinutes && st.locksInSeconds !== undefined) {
+      const left = st.locksInSeconds - Math.floor((Date.now() - shownAt) / 1000);
+      if (left > 0) {
+        bits.push(left >= 60 ? `locks in ${Math.ceil(left / 60)} min` : `locks in under a minute`);
+      } else {
+        headline.textContent = 'Your vault has locked itself.';
+        glyph.replaceChildren(icon(ICONS.lock));
+        if (pill) {
+          pill.textContent = 'Locked';
+          pill.className = 'pill warn';
+        }
+        clearInterval(countdown);
+      }
+    }
+    sub.textContent = bits.join(' · ');
+    sub.hidden = bits.length === 0;
+  };
+  const shownAt = Date.now();
+  const countdown = setInterval(paintSub, 15_000) as unknown as number;
+  statusTimers.push(countdown);
+  paintSub();
+
   main.append(col);
   out.append(main);
 
@@ -386,14 +480,20 @@ function renderStatus(p: Payload): Node {
   const actions = el('div', 'actions');
   if (st.state === 'unauthenticated' || st.state === 'locked') {
     actions.append(
-      button(st.state === 'locked' ? 'Unlock' : 'Sign in', 'primary', () => void act('vault_ui_unlock'), 'unlock'),
+      button(
+        st.state === 'locked' ? 'Unlock' : 'Sign in',
+        'primary',
+        () => act('vault_ui_unlock'),
+        'unlock',
+        'Waiting for the window',
+      ),
     );
     const hintLine = el('span', 'head-sub', 'Opens a window on your desktop');
     hintLine.style.alignSelf = 'center';
     actions.append(hintLine);
   } else if (st.state === 'unlocked') {
-    actions.append(button('Lock now', '', () => void act('vault_ui_lock'), 'lock'));
-    actions.append(button('Sync', 'ghost', () => void act('vault_ui_sync'), 'sync'));
+    actions.append(button('Lock now', '', () => act('vault_ui_lock'), 'lock', 'Locking'));
+    actions.append(button('Sync', 'ghost', () => act('vault_ui_sync'), 'sync', 'Syncing'));
   }
   if (actions.childElementCount) out.append(actions);
   return out;
@@ -444,6 +544,17 @@ function clearReveals(): void {
 
 let totpTimer: number | undefined;
 
+/** Intervals owned by whatever is currently on screen. Cleared before each repaint. */
+const statusTimers: number[] = [];
+
+function clearRenderTimers(): void {
+  for (const t of statusTimers.splice(0)) clearInterval(t);
+  if (totpTimer !== undefined) {
+    clearInterval(totpTimer);
+    totpTimer = undefined;
+  }
+}
+
 function renderItem(p: Payload): Node {
   const it = p.item;
   const out = frag();
@@ -493,10 +604,17 @@ function renderItem(p: Payload): Node {
     link.style.color = 'var(--accent)';
     link.style.cursor = 'pointer';
     link.title = uris[0];
-    link.addEventListener('click', () => void app.openLink({ url: uris[0] }).catch(() => undefined));
+    link.addEventListener('click', () => {
+      void app.openLink({ url: uris[0] }).catch(() => showError('This host would not open the link.'));
+    });
     f.append(link);
     const actions = el('div', 'field-actions');
-    actions.append(iconButton('link', 'Open site', () => void app.openLink({ url: uris[0] }).catch(() => undefined)));
+    actions.append(
+      iconButton('link', 'Open site', async () => {
+        const r = await app.openLink({ url: uris[0] }).catch(() => ({ isError: true }));
+        if (r?.isError) showError('This host would not open the link. The address is above; copy it if you need it.');
+      }),
+    );
     f.append(actions);
     fields.append(f);
   }
@@ -509,20 +627,20 @@ function renderItem(p: Payload): Node {
   if (it.inTrash) {
     actions.append(el('span', 'head-sub', 'Ask Claude to restore this item.'));
   } else {
-    actions.append(button('Back to results', 'ghost', () => void backToList(), 'back'));
+    actions.append(button('Back to results', 'ghost', () => backToList(), 'back', 'Loading'));
   }
   if (actions.childElementCount) out.append(actions);
   return out;
 }
 
-function plainField(label: string, value: string, onCopy: () => void, canCopy: boolean): HTMLElement {
+function plainField(label: string, value: string, onCopy: () => Promise<void>, canCopy: boolean): HTMLElement {
   const f = el('div', 'field');
   f.append(el('div', 'field-label', label));
   f.append(el('div', 'field-value grow truncate', value));
   if (canCopy) {
     const actions = el('div', 'field-actions');
-    const b = iconButton('copy', `Copy ${label.toLowerCase()}`, () => {
-      onCopy();
+    const b = iconButton('copy', `Copy ${label.toLowerCase()}`, async () => {
+      await onCopy();
       flash(b, 'Copied');
     });
     actions.append(b);
@@ -554,12 +672,12 @@ function secretField(it: Item, field: 'password' | 'notes', label: string, canCo
       render(current);
       return;
     }
-    void reveal(it.id, field, key);
+    return reveal(it.id, field, key);
   });
   actions.append(eye);
   if (canCopy) {
-    const cp = iconButton('copy', `Copy ${label.toLowerCase()}`, () => {
-      void copyField(it.id, field);
+    const cp = iconButton('copy', `Copy ${label.toLowerCase()}`, async () => {
+      await copyField(it.id, field);
       flash(cp, 'Copied');
     });
     actions.append(cp);
@@ -621,12 +739,12 @@ function totpField(it: Item, canCopy: boolean): HTMLElement {
       render(current);
       return;
     }
-    void reveal(it.id, 'totp', key);
+    return reveal(it.id, 'totp', key);
   });
   actions.append(eye);
   if (canCopy) {
-    const cp = iconButton('copy', 'Copy code', () => {
-      void copyField(it.id, 'totp');
+    const cp = iconButton('copy', 'Copy code', async () => {
+      await copyField(it.id, 'totp');
       flash(cp, 'Copied');
     });
     actions.append(cp);
@@ -657,18 +775,16 @@ function renderDraft(p: Payload): Node {
   pwInput.autocapitalize = 'off';
   pwInput.setAttribute('autocomplete', 'off');
   pwRow.append(pwInput);
-  const regen = iconButton('refresh', 'Generate another', () => {
-    void (async () => {
-      const r = await call('vault_ui_generate', { length: 20, special: true });
-      if (typeof r.secret === 'string') {
-        pwInput.value = r.secret;
-        updateMeter();
-      }
-    })();
+  const regen = iconButton('refresh', 'Generate another', async () => {
+    const r = await call('vault_ui_generate', { length: 20, special: true });
+    if (typeof r.secret === 'string') {
+      pwInput.value = r.secret;
+      updateMeter();
+    }
   });
   pwRow.append(regen);
-  const copyBtn = iconButton('copy', 'Copy password', () => {
-    void call('vault_ui_copy_value', { value: pwInput.value, label: 'new password' });
+  const copyBtn = iconButton('copy', 'Copy password', async () => {
+    await call('vault_ui_copy_value', { value: pwInput.value, label: 'new password' });
     flash(copyBtn, 'Copied');
   });
   pwRow.append(copyBtn);
@@ -706,9 +822,10 @@ function renderDraft(p: Payload): Node {
   out.append(form);
 
   const actions = el('div', 'actions');
-  const save = button('Save to vault', 'primary', () => {
-    save.setAttribute('disabled', 'true');
-    void (async () => {
+  const save = button(
+    'Save to vault',
+    'primary',
+    async () => {
       const r = await call('vault_ui_save_draft', {
         draft_id: p.draftId,
         name: nameInput.value.trim() || 'Untitled',
@@ -720,14 +837,15 @@ function renderDraft(p: Payload): Node {
         favorite: Boolean(f.favorite),
       });
       if (r.error) {
-        save.removeAttribute('disabled');
         showError(String(r.error));
         return;
       }
       tellModel(`The user saved the new login "${nameInput.value.trim()}" to the vault.`);
       render(r);
-    })();
-  }, 'check');
+    },
+    'check',
+    'Saving',
+  );
   actions.append(save);
   actions.append(
     button('Cancel', 'ghost', () => {
@@ -813,12 +931,12 @@ function renderConfirm(p: Payload): Node {
   if (p.note) out.append(el('div', 'note', p.note));
 
   const actions = el('div', 'actions');
-  const go = button(destructive ? 'Move to trash' : 'Save changes', destructive ? 'danger' : 'primary', () => {
-    go.setAttribute('disabled', 'true');
-    void (async () => {
+  const go = button(
+    destructive ? 'Move to trash' : 'Save changes',
+    destructive ? 'danger' : 'primary',
+    async () => {
       const r = await call('vault_ui_confirm', { action_id: p.actionId });
       if (r.error) {
-        go.removeAttribute('disabled');
         showError(String(r.error));
         return;
       }
@@ -828,8 +946,10 @@ function renderConfirm(p: Payload): Node {
           : `The user confirmed the changes to "${p.itemName ?? 'the item'}". They are saved.`,
       );
       render(r);
-    })();
-  }, destructive ? 'trash' : 'check');
+    },
+    destructive ? 'trash' : 'check',
+    destructive ? 'Moving' : 'Saving',
+  );
   actions.append(go);
   actions.append(
     button('Cancel', 'ghost', () => {
@@ -855,18 +975,16 @@ function renderGenerator(p: Payload): Node {
   input.readOnly = true;
   input.spellcheck = false;
   row.append(input);
-  const regen = iconButton('refresh', 'Generate another', () => {
-    void (async () => {
-      const r = await call('vault_ui_generate', (p.options ?? { length: 20, special: true }) as Record<string, unknown>);
-      if (typeof r.secret === 'string') {
-        input.value = r.secret;
-        m.replaceChildren(meter(localStrength(r.secret)));
-      }
-    })();
+  const regen = iconButton('refresh', 'Generate another', async () => {
+    const r = await call('vault_ui_generate', (p.options ?? { length: 20, special: true }) as Record<string, unknown>);
+    if (typeof r.secret === 'string') {
+      input.value = r.secret;
+      m.replaceChildren(meter(localStrength(r.secret)));
+    }
   });
   row.append(regen);
-  const cp = iconButton('copy', 'Copy', () => {
-    void call('vault_ui_copy_value', { value: input.value, label: 'generated password' });
+  const cp = iconButton('copy', 'Copy', async () => {
+    await call('vault_ui_copy_value', { value: input.value, label: 'generated password' });
     flash(cp, 'Copied');
   });
   row.append(cp);
@@ -1005,6 +1123,7 @@ function showError(message: string): void {
 // ---------------------------------------------------------------------------
 
 function render(p: Payload): void {
+  clearRenderTimers();
   current = p;
   let node: Node;
   if (p.error && !p.view) {
@@ -1045,14 +1164,33 @@ function render(p: Payload): void {
 // Host events. Registered before connect(), which the SDK requires.
 // ---------------------------------------------------------------------------
 
-app.ontoolinput = () => {
+/**
+ * Whether this card has taken its content yet.
+ *
+ * A card is created by exactly one tool call, which produces exactly one result — but
+ * `ui/notifications/tool-result` carries only the result itself, with no invocation id, so a
+ * card cannot tell from the protocol whose result it is being handed. In practice a later
+ * call's result reaches every live card of this server, and every card in the transcript
+ * silently repaints itself to show the newest thing. From the outside that looks like older
+ * messages rewriting themselves.
+ *
+ * So the first result a card sees is its own, and it keeps it. After that the only thing that
+ * changes what a card shows is someone pressing a button on that card.
+ */
+let claimed = false;
+
+function onToolInput(): void {
+  if (claimed) return;
   toolPending = true;
   clearReveals();
   body.replaceChildren(renderSkeleton());
   notifySize();
-};
+}
 
-app.ontoolresult = (params) => {
+function onToolResult(params: unknown): void {
+  // Someone else's invocation. This card already shows what it was made to show.
+  if (claimed) return;
+  claimed = true;
   toolPending = false;
   const payload = parse(params as ToolResult);
   render(payload);
@@ -1076,24 +1214,25 @@ app.ontoolresult = (params) => {
       if (!full.error && current.view === 'list') render(full);
     })();
   }
-};
+}
 
-app.ontoolcancelled = () => {
+function onToolCancelled(): void {
+  if (claimed) return;
+  claimed = true;
   toolPending = false;
   void act('vault_ui_state');
-};
+}
 
+app.ontoolinput = onToolInput;
+app.ontoolresult = onToolResult;
+app.ontoolcancelled = onToolCancelled;
 app.onhostcontextchanged = (ctx) => applyHost(ctx as HostCtx);
 
-// A locked vault must not leave a revealed password on screen.
-setInterval(() => {
-  if (toolPending || busy > 0) return;
-  if (current.view !== 'status') return;
-  void (async () => {
-    const r = await call('vault_ui_state');
-    if (!r.error) render(r);
-  })();
-}, 15_000);
+// There is deliberately no background poll here. A status card that re-queried the server
+// every fifteen seconds meant every such card still sitting in the transcript quietly changed
+// what it said, long after the moment it described — and each one cost a CLI process spawn to
+// do it. A card now describes the moment it was made, and the countdown below is arithmetic on
+// the number it was given rather than a question asked again.
 
 void (async () => {
   // Demo modes for scripts/serve-ui.mjs; they never run inside a host.
@@ -1101,6 +1240,13 @@ void (async () => {
   const demo = params.get('demo');
   if (demo) {
     demoMode = true;
+    (window as unknown as Record<string, unknown>).__cardTestHooks = {
+      onToolInput,
+      onToolResult,
+      onToolCancelled,
+      claimed: () => claimed,
+      current: () => current,
+    };
     const theme = params.get('theme') ?? undefined;
     applyHost({ theme });
     // `shot` paints the surface a host would paint behind the card, and pads it, so a
@@ -1121,7 +1267,11 @@ void (async () => {
     // A card created by a tool call gets its content from that call's result. Only a card
     // that somehow rendered without one has to ask.
     setTimeout(() => {
-      if (!toolPending && !current.view) void act('vault_ui_state');
+      if (toolPending || current.view) return;
+      // Asking for this counts as taking the card's content, so a result meant for some other
+      // invocation cannot arrive afterwards and replace it.
+      claimed = true;
+      void act('vault_ui_state');
     }, 400);
   } catch (e) {
     render({ error: `Could not connect to the host: ${e instanceof Error ? e.message : String(e)}` });
@@ -1145,8 +1295,14 @@ function demoCall(name: string, args: Record<string, unknown>): Payload & Record
       const secret = [...bytes].map((n) => alphabet[n % alphabet.length]).join('');
       return { secret, strength: localStrength(secret) };
     }
-    case 'vault_ui_item':
-      return demoPayload('item') as Payload & Record<string, unknown>;
+    case 'vault_ui_item': {
+      // Answer for the id that was asked for. Returning a fixed item regardless made the
+      // preview lie about the one thing this call exists to do.
+      const base = demoPayload('item') as Payload & Record<string, unknown>;
+      const id = String(args.id ?? base.itemId);
+      const known = current.item && current.item.id === id ? current.item : undefined;
+      return { ...base, itemId: id, item: { ...(known ?? base.item), id } } as Payload & Record<string, unknown>;
+    }
     case 'vault_ui_search':
       return demoPayload('list') as Payload & Record<string, unknown>;
     case 'vault_ui_save_draft':

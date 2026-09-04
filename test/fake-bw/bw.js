@@ -12,6 +12,8 @@
 //   FAKE_BW_STATUS_EXIT1      `status` prints valid JSON and exits 1, as the real CLI does
 //                             when the server is unreachable (bitwarden/clients#18373)
 //   FAKE_BW_FAIL=<command>    make one command fail with a network error
+//   FAKE_BW_CALL_LOG=<path>   append every invocation, so a test can assert how many times
+//                             the CLI was actually spawned — which is what card latency is
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -103,6 +105,14 @@ function decodePayload(index) {
 
 const state = load();
 const cmd = positional[0];
+
+if (process.env.FAKE_BW_CALL_LOG) {
+  try {
+    fs.appendFileSync(process.env.FAKE_BW_CALL_LOG, positional.slice(0, 2).join(' ').trim() + '\n');
+  } catch {
+    /* the log is a test convenience, never a reason to fail a command */
+  }
+}
 
 if (process.env.FAKE_BW_FAIL && process.env.FAKE_BW_FAIL === cmd) {
   errOut('ENOTFOUND: could not reach the server.');

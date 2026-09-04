@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.1.1 — 2026-09-04
+
+Cards behaved badly in two ways that were obvious in use and invisible in the tests.
+
+### Cards no longer rewrite themselves
+
+A card kept repainting to show a newer, unrelated result, so older messages appeared to
+change their minds. `ui/notifications/tool-result` carries only the result — the protocol gives
+a card no way to tell whose result it is being handed — and in practice a later call's result
+reaches every live card of the same server.
+
+- A card now takes the first result it is given and keeps it. Nothing changes it afterwards
+  except someone pressing a button on that card.
+- The same rule covers a later call's tool-input, which used to blank older cards to a
+  loading skeleton, and its cancellation.
+- The status card's fifteen-second background poll is gone. It meant every status card still
+  sitting in the transcript quietly rewrote itself long after the moment it described, and
+  each one spawned a CLI process to do it. The countdown to the automatic lock is now
+  arithmetic on the number the card was given.
+
+### Buttons respond
+
+Every button ends in a Bitwarden CLI call, which spawns a process. A reveal was three of them
+in sequence — check the session, fetch the item, fetch the password — for about ten seconds
+during which the card looked exactly as it had before the click. It read as broken, and got
+clicked again; the log shows the same reveal three times over.
+
+- Buttons now show a spinner for exactly as long as the work takes, and refuse a second press
+  while running. The card dims and stops taking input.
+- The session state is no longer re-checked against the CLI on every call. This server's own
+  key was already the authority, and a key that has gone stale surfaces from the real call.
+- A password or note is read out of the item the server already had to fetch, rather than
+  through a second invocation.
+- Items are cached for twenty seconds, emptied the moment the vault locks or anything is
+  written. Revealing and then copying now costs no CLI calls at all.
+
+Together: opening an item went from three process spawns to one, and revealing or copying
+from three to none. Measured against the real vault beforehand, those spawns cost about two
+seconds for a session check and just under four for an item read.
+
+### Also
+
+- A session key the CLI has stopped accepting is now dropped rather than held. Two server
+  processes can share a machine — Claude Desktop and a terminal session each run their own —
+  and whichever unlocks second retires the first one's key; the first used to keep failing
+  while insisting the vault was open.
+- Opening a link the host refuses says so instead of doing nothing.
+- Nine tests count CLI invocations rather than measure time, since the count is what the wall
+  clock is made of. A browser self-test at `/selftest.html` drives the card's real host
+  handlers and asserts that a foreign result cannot repaint a card.
+
 ## 0.1.0 — 2026-09-03
 
 First release.

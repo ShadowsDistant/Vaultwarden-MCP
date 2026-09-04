@@ -90,6 +90,12 @@ async function run(name: string, body: () => Promise<CallToolResult>): Promise<C
   } catch (e) {
     if (e instanceof BwError) {
       log.warn(`tool ${name} failed`, { code: e.code });
+      // The CLI refused the session key this process was holding. Stop holding it, so the
+      // next call reports a locked vault instead of failing the same way again.
+      if (e.code === 'locked' || e.code === 'not_logged_in') {
+        session.forgetSession();
+        vault.invalidateCache();
+      }
       return fail(e.message, e.hint, { view: e.code === 'locked' || e.code === 'not_logged_in' ? 'status' : undefined });
     }
     if (e instanceof PromptError) {
@@ -193,7 +199,22 @@ function hint(state: string): string | undefined {
   }
 }
 
+/**
+ * The gate every vault operation passes through.
+ *
+ * It deliberately does not ask the CLI. `bw status` costs a process spawn and about two
+ * seconds, and it was being paid on every single click in the card — a reveal was three
+ * sequential CLI invocations and ten seconds, which reads to anyone using it as a button that
+ * does nothing. This server's own session key is the authority anyway (`bw status` has
+ * reported an unlocked vault that then refused to decrypt), and a key that has gone stale
+ * surfaces as a `locked` error from the real call, which `run` turns back into a locked
+ * session. The slow path is only taken to explain *why*, when the answer is already no.
+ */
 async function requireReady(): Promise<void> {
+  if (session.isUnlocked()) {
+    session.touch();
+    return;
+  }
   const st = await session.status();
   if (st.state === 'unlocked') {
     session.touch();
@@ -353,7 +374,7 @@ export function registerTools(server: McpServer): void {
       run('vault_sync', async () => {
         await requireReady();
         const lastSync = await session.sync();
-        vault.invalidateFolders();
+        vault.invalidateCache();
         return ok(envelope({ lastSync }));
       }),
   );
@@ -889,7 +910,7 @@ export function registerTools(server: McpServer): void {
           const okAgain = await session.reauthenticate(`Showing the ${a.field} for ${raw.name}.`);
           if (!okAgain) return fail('Not confirmed.', 'The master password was not re-entered.');
         }
-        const value = await vault.getSecret(a.id, a.field);
+        const value = await vault.getSecret(a.id, a.field, raw);
         const payload = { id: a.id, field: a.field, value, hideAfterSeconds: CONFIG.revealSeconds };
         return ok(payload, { revealed: true, field: a.field, hideAfterSeconds: CONFIG.revealSeconds });
       }),
@@ -913,7 +934,7 @@ export function registerTools(server: McpServer): void {
             const okAgain = await session.reauthenticate(`Copying the ${a.field} for ${raw.name}.`);
             if (!okAgain) return fail('Not confirmed.');
           }
-          value = await vault.getSecret(a.id, a.field);
+          value = await vault.getSecret(a.id, a.field, raw);
         }
         const r = await copySecret(value, `${a.field} of item ${a.id}`);
         if (!r.ok) throw new ToolError('Could not reach the clipboard on this system.');
@@ -1059,7 +1080,7 @@ export function registerTools(server: McpServer): void {
     run('vault_ui_sync', async () => {
       await requireReady();
       await session.sync();
-      vault.invalidateFolders();
+      vault.invalidateCache();
       const { view } = await statusView();
       return ok(view, view);
     }),

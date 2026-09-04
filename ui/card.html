@@ -199,8 +199,32 @@
   .btn.danger:hover { opacity: .9; }
   .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
   .btn.ghost:hover { background: var(--bg2); color: var(--fg); }
-  .btn[disabled] { opacity: .5; pointer-events: none; }
+  .btn[disabled] { opacity: .62; pointer-events: none; }
   .btn svg { width: 14px; height: 14px; }
+
+  /* ---- working state ----
+     Every button here ends in a call to the Bitwarden CLI, which spawns a process and can
+     take several seconds. Nothing below is decoration: without it the card looks identical
+     before and after a click, which is indistinguishable from a button that does nothing. */
+  .spin { animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .icon-btn.working { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+  .icon-btn.working svg { width: 15px; height: 15px; }
+
+  /* While anything is in flight the card stops accepting input, so a second impatient click
+     cannot queue a duplicate. The buttons keep their own colour; only the body dims. */
+  .card.busy .fields,
+  .card.busy .list,
+  .card.busy .form,
+  .card.busy .diff { opacity: .55; pointer-events: none; transition: opacity .12s ease; }
+  .card.busy { cursor: progress; }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* The spinner is the only signal that a slow call is running, so it keeps turning — just
+       slowly enough not to be the thing anyone notices. */
+    .spin { animation-duration: 2.4s !important; }
+  }
 
   .actions { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line2); }
   .actions .spacer { flex: 1; }

@@ -1,0 +1,89 @@
+<title>Vault card self-test</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, Consolas, monospace; margin: 20px; background: #faf9f5; color: #141413; }
+  h1 { font-size: 14px; margin: 0 0 12px; font-family: system-ui, sans-serif; }
+  li { list-style: none; margin: 2px 0; }
+  .pass::before { content: 'PASS  '; color: #1f7a4d; font-weight: 700; }
+  .fail::before { content: 'FAIL  '; color: #b3261e; font-weight: 700; }
+  iframe { width: 460px; height: 420px; border: 1px solid #e3e1d8; border-radius: 8px; margin-top: 16px; }
+  #summary { font-weight: 700; margin-top: 12px; }
+</style>
+
+<h1>Vault card self-test</h1>
+<ul id="results"></ul>
+<div id="summary">RUNNING</div>
+<iframe id="frame" src="card.html?demo=item&theme=light" title="card under test"></iframe>
+
+<script>
+  // Drives the card's real host-notification handlers, so what is checked here is the code a
+  // host runs — in particular the rule that a card keeps the content it was made with, which
+  // is what stops older cards in a transcript repainting themselves to show a newer result.
+  const results = document.getElementById('results');
+  const summary = document.getElementById('summary');
+  let failures = 0;
+
+  function check(name, condition, detail) {
+    const li = document.createElement('li');
+    li.className = condition ? 'pass' : 'fail';
+    li.textContent = condition ? name : `${name} — ${detail ?? 'unexpected'}`;
+    results.append(li);
+    if (!condition) failures++;
+  }
+
+  function itemResult(name, id) {
+    const payload = { view: 'item', itemId: id, item: { id, name, hasPassword: true } };
+    return { content: [{ type: 'text', text: JSON.stringify(payload) }], structuredContent: payload };
+  }
+
+  function run() {
+    const win = document.getElementById('frame').contentWindow;
+    const doc = win.document;
+    const hooks = win.__cardTestHooks;
+    if (!hooks) {
+      check('test hooks are exposed in demo mode', false, 'window.__cardTestHooks missing');
+      finish();
+      return;
+    }
+    const shownName = () => doc.querySelector('.name')?.textContent ?? '';
+
+    check('a fresh card has not claimed its content', hooks.claimed() === false);
+
+    hooks.onToolResult(itemResult('Its own item', 'aaaaaaaa-0000-4000-8000-000000000001'));
+    check('the first result is taken', shownName() === 'Its own item', shownName());
+    check('the card is now claimed', hooks.claimed() === true);
+
+    hooks.onToolResult(itemResult('A different item', 'bbbbbbbb-0000-4000-8000-000000000002'));
+    check('a later invocation does not repaint this card', shownName() === 'Its own item', shownName());
+
+    hooks.onToolInput();
+    check('a later invocation does not blank this card to a skeleton', shownName() === 'Its own item', shownName());
+
+    hooks.onToolCancelled();
+    check('a later cancellation does not disturb this card', shownName() === 'Its own item', shownName());
+
+    // A click by the person looking at the card is the one thing that may change it.
+    const reveal = [...doc.querySelectorAll('.icon-btn')].find((b) => /show password/i.test(b.title));
+    check('the reveal control exists', Boolean(reveal));
+    if (reveal) {
+      reveal.click();
+      check('a click shows a working state', reveal.classList.contains('working') || Boolean(doc.querySelector('.spin')));
+      setTimeout(() => {
+        const value = [...doc.querySelectorAll('.field')]
+          .find((f) => f.querySelector('.field-label')?.textContent === 'Password')
+          ?.querySelector('.field-value')?.textContent ?? '';
+        check('the reveal completes and shows a value', value.length > 4 && !value.includes('•'), value);
+        finish();
+      }, 400);
+    } else {
+      finish();
+    }
+  }
+
+  function finish() {
+    summary.textContent = failures === 0 ? 'ALL PASS' : `FAILURES ${failures}`;
+  }
+
+  const frame = document.getElementById('frame');
+  // The card renders its demo payload shortly after load; give it a beat before driving it.
+  frame.addEventListener('load', () => setTimeout(run, 250));
+</script>

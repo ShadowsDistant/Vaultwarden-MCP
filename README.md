@@ -141,8 +141,8 @@ exist, so nothing can call them.
 ```bash
 npm install --legacy-peer-deps
 npm run build          # tsc, then bundle the card into one HTML file
-npm test               # 64 tests against a fake Bitwarden CLI, over real stdio
-npm run preview        # the card's views at http://localhost:8766
+npm test               # 73 tests against a fake Bitwarden CLI, over real stdio
+npm run preview        # the card's views at http://localhost:8766, and /selftest.html
 ```
 
 The tests never touch a real vault. `test/fake-bw/bw.js` emulates the CLI, matching its

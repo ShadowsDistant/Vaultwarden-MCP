@@ -76,6 +76,14 @@ http
       res.end(index);
       return;
     }
+    // The self-test page lives in the source tree next to the card it drives, so it is
+    // served from there rather than copied into dist on every build.
+    if (url.pathname === '/selftest.html') {
+      const page = path.resolve(root, 'ui', 'selftest.html');
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(fs.readFileSync(page));
+      return;
+    }
     const file = path.join(dist, path.basename(url.pathname));
     if (!file.startsWith(dist) || !fs.existsSync(file)) {
       res.writeHead(404).end('not found');

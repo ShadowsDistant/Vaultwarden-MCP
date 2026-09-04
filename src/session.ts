@@ -43,6 +43,50 @@ export function sessionEnv(): Record<string, string> {
   return sessionKey ? { BW_SESSION: sessionKey } : {};
 }
 
+/**
+ * Run when the vault closes, for whatever reason. The item cache holds decrypted secrets and
+ * must not outlive the session that decrypted them; it lives in vault.ts, which already
+ * imports this module, so it registers here rather than being reached for from a lock path.
+ */
+const lockListeners: (() => void)[] = [];
+
+export function onLock(listener: () => void): void {
+  lockListeners.push(listener);
+}
+
+function fireLock(): void {
+  for (const listener of lockListeners) {
+    try {
+      listener();
+    } catch {
+      /* a listener must never keep the vault open */
+    }
+  }
+}
+
+export function isUnlocked(): boolean {
+  return sessionKey !== null;
+}
+
+/**
+ * Drops the session because the CLI just refused to use it.
+ *
+ * A key can stop working without this process doing anything: `bw unlock` mints a new key and
+ * retires the previous one, and more than one server instance can share a machine — Claude
+ * Desktop and a terminal session each run their own. Whichever unlocks second silently
+ * invalidates the first, whose next call fails as "locked" while it still believes it holds an
+ * open vault. Believing it is the bug; this is how that belief gets corrected.
+ */
+export function forgetSession(): void {
+  if (!sessionKey) return;
+  sessionKey = null;
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = null;
+  clearPending();
+  fireLock();
+  log.audit('session_rejected_by_cli');
+}
+
 export function touch(): void {
   if (!sessionKey) return;
   lastActivity = Date.now();
@@ -294,6 +338,7 @@ export async function lock(): Promise<void> {
   const had = sessionKey !== null;
   sessionKey = null;
   clearPending();
+  fireLock();
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = null;
   await bw(['lock'], { timeoutMs: 30_000 }).catch(() => undefined);
@@ -303,6 +348,7 @@ export async function lock(): Promise<void> {
 export async function logout(): Promise<void> {
   sessionKey = null;
   clearPending();
+  fireLock();
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = null;
   await bw(['logout'], { timeoutMs: 60_000 }).catch(() => undefined);

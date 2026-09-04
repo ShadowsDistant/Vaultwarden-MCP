@@ -1,7 +1,7 @@
 import { bw, BwError } from './bw.js';
 import { log } from './log.js';
 import { isUuid, Sanitizer } from './sanitize.js';
-import { requireUnlocked, sessionEnv, touch } from './session.js';
+import { onLock, requireUnlocked, sessionEnv, touch } from './session.js';
 
 /**
  * Vault operations, and the two projections that decide who may see what.
@@ -132,13 +132,39 @@ export function toCardItem(item: BwItem, folders: BwFolder[]): CardItem {
   };
 }
 
-export async function getRawItem(id: string): Promise<BwItem> {
+/**
+ * A very short-lived cache of decrypted items.
+ *
+ * Every CLI invocation is a fresh Node process booting a webpack bundle, so `bw get item`
+ * costs the better part of four seconds. Without this, opening an item and then revealing its
+ * password pays that twice, and the second click looks like a button that does nothing.
+ *
+ * The entries hold real secrets, so: a short life, and emptied the moment the vault locks or
+ * anything is written. That is the same memory that already holds the session key, so it adds
+ * no new exposure — but it is worth keeping small and brief regardless.
+ */
+const ITEM_CACHE_MS = 20_000;
+const itemCache = new Map<string, { at: number; item: BwItem }>();
+
+export function invalidateCache(): void {
+  itemCache.clear();
+  folderCache = null;
+}
+
+// Decrypted items must not survive the session that decrypted them.
+onLock(invalidateCache);
+
+export async function getRawItem(id: string, opts: { fresh?: boolean } = {}): Promise<BwItem> {
   requireUnlocked();
   if (!isUuid(id)) {
     throw new BwError('not_found', 'That is not an item id.', 'Search first and use the id from the result.');
   }
+  const hit = itemCache.get(id);
+  if (!opts.fresh && hit && Date.now() - hit.at < ITEM_CACHE_MS) return hit.item;
+
   const item = await bw<BwItem>(['get', 'item', id], { env: sessionEnv() });
   if (!item || typeof item !== 'object' || !item.id) throw new BwError('not_found', 'No such item.');
+  itemCache.set(id, { at: Date.now(), item });
   return item;
 }
 
@@ -168,10 +194,24 @@ export type SecretField = 'password' | 'totp' | 'notes';
  * Reads one secret. Every call site must have a human authorisation behind it: a click in
  * the card, or a native dialog. Nothing here checks that — the callers do, and they are the
  * only place that decision belongs.
+ *
+ * The password and the notes are already inside the item the caller had to fetch to check its
+ * re-prompt flag, so pass it in and no second CLI invocation happens at all. A one-time code
+ * is different: what is stored is the seed, and only the CLI turns that into the six digits
+ * that are valid right now.
  */
-export async function getSecret(id: string, field: SecretField): Promise<string> {
+export async function getSecret(id: string, field: SecretField, known?: BwItem): Promise<string> {
   requireUnlocked();
   if (!isUuid(id)) throw new BwError('not_found', 'That is not an item id.');
+
+  if (known && known.id === id && field !== 'totp') {
+    const local = field === 'password' ? known.login?.password : known.notes;
+    const text = String(local ?? '');
+    if (!text) throw new BwError('not_found', `This item has no ${field}.`);
+    log.audit('secret_read', { itemId: id, field, cached: true });
+    return text;
+  }
+
   const value = await bw<string>(['get', field, id], { env: sessionEnv(), raw: true, timeoutMs: 45_000 });
   const text = String(value ?? '').replace(/\r?\n$/, '');
   if (!text) throw new BwError('not_found', `This item has no ${field}.`);
@@ -277,7 +317,7 @@ async function writeItem(args: string[], payload: Record<string, unknown>): Prom
 export async function createLogin(input: NewLogin): Promise<BwItem> {
   requireUnlocked();
   const created = await writeItem(['create', 'item'], buildLoginPayload(input));
-  folderCache = null;
+  invalidateCache();
   log.audit('item_created', { itemId: created?.id });
   touch();
   return created;
@@ -319,7 +359,7 @@ export async function editItem(id: string, patch: ItemPatch): Promise<BwItem> {
     };
   }
   const saved = await writeItem(['edit', 'item', id], next);
-  folderCache = null;
+  invalidateCache();
   log.audit('item_edited', { itemId: id, fields: Object.keys(patch) });
   touch();
   return saved;
@@ -334,6 +374,7 @@ export async function trashItem(id: string): Promise<void> {
   requireUnlocked();
   if (!isUuid(id)) throw new BwError('not_found', 'That is not an item id.');
   await bw(['delete', 'item', id], { env: sessionEnv(), timeoutMs: 60_000 });
+  invalidateCache();
   log.audit('item_trashed', { itemId: id });
   touch();
 }
@@ -342,10 +383,8 @@ export async function restoreItem(id: string): Promise<void> {
   requireUnlocked();
   if (!isUuid(id)) throw new BwError('not_found', 'That is not an item id.');
   await bw(['restore', 'item', id], { env: sessionEnv(), timeoutMs: 60_000 });
+  invalidateCache();
   log.audit('item_restored', { itemId: id });
   touch();
 }
 
-export function invalidateFolders(): void {
-  folderCache = null;
-}
