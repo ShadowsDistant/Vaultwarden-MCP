@@ -56,39 +56,70 @@ foreach ($file in 'package.json', 'tsconfig.json', '.npmrc', 'package-lock.json'
   if (Test-Path $from) { Copy-Item -Force $from (Join-Path $build $file) }
 }
 
+# Runs a native command and judges it by its exit code alone.
+#
+# Under $ErrorActionPreference = 'Stop', anything a native executable writes to stderr becomes
+# a terminating NativeCommandError — so npm's EBADENGINE warning, which is only a warning, would
+# abort the build. Redirecting the stream is worse: Windows PowerShell 5.1 wraps each line in an
+# ErrorRecord. Relaxing the preference for the call and checking $LASTEXITCODE is the honest way.
+# Out-Host, not a bare call: a PowerShell function returns everything written to the output
+# stream, so npm's own chatter would be returned alongside the exit code and every comparison
+# against it would be against an array.
+function Invoke-Native {
+  param([string]$Exe, [string[]]$Arguments)
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    # Both streams are turned back into plain text before they are printed. These tools log
+    # their progress to stderr, and Windows PowerShell 5.1 wraps every stderr line in an
+    # ErrorRecord — so without this, ordinary progress messages are rendered as scary red
+    # NativeCommandError blocks with a stack trace attached.
+    & $Exe @Arguments 2>&1 | ForEach-Object {
+      if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host $_.Exception.Message } else { Write-Host $_ }
+    }
+    return $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previous
+  }
+}
+
 Push-Location $build
 try {
   Write-Host 'installing dependencies...'
   # Sanitize PATH for the child: the machine PATH here has an unbalanced quote that kills any
   # batch file npm shells out to, with the useless message "operable program or batch file".
-  $clean = ($env:PATH -split ';' | ForEach-Object { $_ -replace '"', '' } | Where-Object { $_.Trim() -ne '' }) -join ';'
+  # Not $clean: PowerShell variable names are case-insensitive, so that would be the -Clean
+  # switch parameter, and assigning a string to it throws a type error attributed to the call
+  # site rather than to this line.
+  $sanitizedPath = ($env:PATH -split ';' | ForEach-Object { $_ -replace '"', '' } | Where-Object { $_.Trim() -ne '' }) -join ';'
   $old = $env:PATH
-  $env:PATH = $clean
+  $env:PATH = $sanitizedPath
   try {
     $lock = Join-Path $build 'package-lock.json'
+    $code = 0
     if (Test-Path $lock) {
       # --legacy-peer-deps: the MCP Apps SDK declares react as a peer, and this server renders none.
-      & $node $npmCli ci --legacy-peer-deps --no-audit --no-fund
-      if ($LASTEXITCODE -ne 0) {
+      $code = Invoke-Native $node @($npmCli, 'ci', '--legacy-peer-deps', '--no-audit', '--no-fund')
+      if ($code -ne 0) {
         Write-Host 'npm ci failed on the copied lockfile; falling back to npm install.'
         Remove-Item -Force $lock
-        & $node $npmCli install --legacy-peer-deps --no-audit --no-fund
+        $code = Invoke-Native $node @($npmCli, 'install', '--legacy-peer-deps', '--no-audit', '--no-fund')
       }
     } else {
-      & $node $npmCli install --legacy-peer-deps --no-audit --no-fund
+      $code = Invoke-Native $node @($npmCli, 'install', '--legacy-peer-deps', '--no-audit', '--no-fund')
     }
-    if ($LASTEXITCODE -ne 0) { throw "Dependency install failed with exit code $LASTEXITCODE." }
+    if ($code -ne 0) { throw "Dependency install failed with exit code $code." }
   } finally {
     $env:PATH = $old
   }
 
   Write-Host 'compiling...'
-  & $node (Join-Path $build 'node_modules\typescript\bin\tsc') -p tsconfig.json
-  if ($LASTEXITCODE -ne 0) { throw "TypeScript compilation failed." }
+  $code = Invoke-Native $node @((Join-Path $build 'node_modules\typescript\bin\tsc'), '-p', 'tsconfig.json')
+  if ($code -ne 0) { throw "TypeScript compilation failed." }
 
   Write-Host 'bundling the card...'
-  & $node (Join-Path $build 'scripts\build-ui.mjs')
-  if ($LASTEXITCODE -ne 0) { throw "The card bundle failed." }
+  $code = Invoke-Native $node @((Join-Path $build 'scripts\build-ui.mjs'))
+  if ($code -ne 0) { throw "The card bundle failed." }
 } finally {
   Pop-Location
 }
@@ -98,13 +129,15 @@ Write-Host "Built: $(Join-Path $build 'dist\index.js')"
 
 if ($Install) {
   if (-not $Server) { throw "Pass -Server https://your-vault.example.com so the server knows which instance to use." }
-  $args = @((Join-Path $build 'scripts\install.mjs'), '--server', $Server, '--idle-lock', "$IdleLockMinutes")
-  if ($Email) { $args += @('--email', $Email) }
-  if ($NoReveal) { $args += '--no-reveal' }
-  if ($AllowHttp) { $args += '--allow-http' }
+  # Not $args: that is an automatic variable in PowerShell, and assigning to it corrupts the
+  # splat so the next call binds the wrong parameters entirely.
+  $installArgs = @((Join-Path $build 'scripts\install.mjs'), '--server', $Server, '--idle-lock', "$IdleLockMinutes")
+  if ($Email) { $installArgs += @('--email', $Email) }
+  if ($NoReveal) { $installArgs += '--no-reveal' }
+  if ($AllowHttp) { $installArgs += '--allow-http' }
   $env:VW_MCP_HOME = $home_
-  & $node @args
-  if ($LASTEXITCODE -ne 0) { throw "Registering with Claude Desktop failed." }
+  $code = Invoke-Native $node $installArgs
+  if ($code -ne 0) { throw "Registering with Claude Desktop failed." }
 } else {
   Write-Host ''
   Write-Host 'To register it with Claude Desktop:'
