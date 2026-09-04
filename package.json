@@ -1,0 +1,36 @@
+{
+  "name": "vaultwarden-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server for a self-hosted Vaultwarden vault, driven through the official Bitwarden CLI. Secrets never reach the model.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-ui.mjs",
+    "test": "node --test --test-timeout=45000 \"test/unit/*.test.mjs\" \"test/e2e/*.test.mjs\"",
+    "pack": "node scripts/pack-mcpb.mjs",
+    "sync": "node scripts/sync-build.mjs --build",
+    "preview": "node scripts/serve-ui.mjs",
+    "icons": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-icon.ps1"
+  },
+  "dependencies": {
+    "@bitwarden/cli": "2026.8.0",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ShadowsDistant/Vaultwarden-MCP.git"
+  }
+}

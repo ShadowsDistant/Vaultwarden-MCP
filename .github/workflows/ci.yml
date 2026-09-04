@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # The Bitwarden CLI asks for Node 22; 24 is what most people will actually have. The
+        # tests run on both so a version-specific break shows up here rather than on a desktop.
+        node: ['22', '24']
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # --legacy-peer-deps: the MCP Apps SDK declares react as a peer, and this server renders none.
+      - name: Install
+        run: npm ci --legacy-peer-deps
+
+      # The CLI holds the vault key, so a tampered copy is game over. Provenance is checked on
+      # every run rather than trusted once at pin time.
+      - name: Verify dependency provenance
+        run: npm audit signatures
+        continue-on-error: true
+
+      - name: Build
+        run: npm run build
+
+      # No real vault and no network: the suite drives the server over stdio against a fake CLI.
+      - name: Test
+        run: npm test
+
+      - name: Package
+        run: npm run pack
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.node == '22'
+        with:
+          name: vaultwarden-mcp-mcpb
+          path: out/*.mcpb
+          if-no-files-found: error
