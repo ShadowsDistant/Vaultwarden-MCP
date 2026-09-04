@@ -97,7 +97,7 @@ const manifest = {
   documentation: 'https://github.com/ShadowsDistant/Vaultwarden-MCP#readme',
   support: 'https://github.com/ShadowsDistant/Vaultwarden-MCP/issues',
   repository: { type: 'git', url: 'https://github.com/ShadowsDistant/Vaultwarden-MCP' },
-  license: 'MIT',
+  license: 'GPL-3.0-or-later',
   keywords: ['vaultwarden', 'bitwarden', 'password manager', 'passwords', 'vault', 'security'],
   icon: 'icon.png',
   server: {
