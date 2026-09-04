@@ -43,10 +43,6 @@ export function sessionEnv(): Record<string, string> {
   return sessionKey ? { BW_SESSION: sessionKey } : {};
 }
 
-export function isUnlocked(): boolean {
-  return sessionKey !== null;
-}
-
 export function touch(): void {
   if (!sessionKey) return;
   lastActivity = Date.now();

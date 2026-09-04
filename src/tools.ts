@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BwError } from './bw.js';
-import { CONFIG, readConfig } from './config.js';
+import { CONFIG } from './config.js';
 import { clipboardAvailable, copySecret } from './clipboard.js';
 import { log } from './log.js';
 import * as pending from './pending.js';
@@ -118,9 +118,6 @@ function limiter(max: number, windowMs: number) {
       hits.push(now);
       return true;
     },
-    reset(): void {
-      hits.length = 0;
-    },
   };
 }
 
@@ -137,10 +134,6 @@ const appTools: Switchable[] = [];
  */
 export function enableAppTools(): number {
   for (const t of appTools) t.enable();
-  return appTools.length;
-}
-
-export function appToolCount(): number {
   return appTools.length;
 }
 
@@ -1074,11 +1067,3 @@ export function registerTools(server: McpServer): void {
 
   log.info('tools registered', { reveal: CONFIG.revealMode, idleLockMinutes: CONFIG.idleLockMinutes });
 }
-
-/** Test seam: clears the limiters between cases. */
-export function resetLimits(): void {
-  modelRevealLimit.reset();
-  cardRevealLimit.reset();
-}
-
-export const __testing = { readConfig };

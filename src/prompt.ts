@@ -185,9 +185,3 @@ export async function confirm(title: string, message: string, opts: { confirmLab
   });
   return r.ok;
 }
-
-/** Resets the rate limiter. Tests only. */
-export function resetPromptLimits(): void {
-  recent.length = 0;
-  open = false;
-}
