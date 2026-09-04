@@ -6,6 +6,9 @@
 //
 // Options: --config <path>, --idle-lock <minutes>, --no-reveal, --allow-http, --ca <file>
 //
+// Anything not passed is left out of the config entirely, so the server's own defaults apply
+// and keep applying — a value written here would pin it against every later change.
+//
 // The vault address is written here, at install time, and never taken from a tool argument.
 // A model that could repoint the CLI at another host could then ask for a sign-in, and the
 // user would type their master password into a window that looks exactly right.

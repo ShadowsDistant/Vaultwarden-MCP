@@ -17,7 +17,7 @@ param(
   [switch]$Install,
   [string]$Server,
   [string]$Email,
-  [int]$IdleLockMinutes = 15,
+  [int]$IdleLockMinutes = -1,
   [switch]$NoReveal,
   [switch]$AllowHttp,
   [switch]$Clean
@@ -131,7 +131,10 @@ if ($Install) {
   if (-not $Server) { throw "Pass -Server https://your-vault.example.com so the server knows which instance to use." }
   # Not $args: that is an automatic variable in PowerShell, and assigning to it corrupts the
   # splat so the next call binds the wrong parameters entirely.
-  $installArgs = @((Join-Path $build 'scripts\install.mjs'), '--server', $Server, '--idle-lock', "$IdleLockMinutes")
+  $installArgs = @((Join-Path $build 'scripts\install.mjs'), '--server', $Server)
+  # Only when asked for. Writing a value here pins it into the config file, where it would go
+  # on overriding the server's own default long after that default has moved.
+  if ($IdleLockMinutes -ge 0) { $installArgs += @('--idle-lock', "$IdleLockMinutes") }
   if ($Email) { $installArgs += @('--email', $Email) }
   if ($NoReveal) { $installArgs += '--no-reveal' }
   if ($AllowHttp) { $installArgs += '--allow-http' }
