@@ -47,11 +47,25 @@ function safeJson(v: unknown): string {
   }
 }
 
+// When the host goes away, stderr is a dead pipe or socket. An unhandled EPIPE from it would
+// reach uncaughtException, which logs, which writes to stderr again: a busy loop that pins a
+// core and fills the log file. Once stderr has failed, stop writing to it.
+let stderrDead = false;
+process.stderr.on('error', () => {
+  stderrDead = true;
+});
+
 function emit(level: string, msg: string, extra?: unknown): void {
   const stamp = new Date().toISOString();
   const tail = extra === undefined ? '' : ' ' + safeJson(extra);
   const line = `${stamp} [${level}] ${msg}${tail}`;
-  process.stderr.write(line + '\n');
+  if (!stderrDead) {
+    try {
+      process.stderr.write(line + '\n');
+    } catch {
+      stderrDead = true;
+    }
+  }
   fileWrite(line);
 }
 

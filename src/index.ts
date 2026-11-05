@@ -171,7 +171,13 @@ async function main(): Promise<void> {
   process.stdin.on('close', () => void shutdown('stdin closed'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('uncaughtException', (e) => log.error('uncaughtException', e));
+  // A broken stdout or stderr means the host is gone, whatever stdin reported.
+  process.stdout.on('error', () => void shutdown('stdout broken'));
+  process.stderr.on('error', () => void shutdown('stderr broken'));
+  process.on('uncaughtException', (e) => {
+    if ((e as NodeJS.ErrnoException)?.code === 'EPIPE') return void shutdown('broken pipe');
+    log.error('uncaughtException', e);
+  });
   process.on('unhandledRejection', (e) => log.error('unhandledRejection', e));
 
   const transport = new StdioServerTransport();
