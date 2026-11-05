@@ -35,6 +35,32 @@ const UI = { ui: { resourceUri: CONFIG.uiUri } };
 const APP_ONLY = { ui: { resourceUri: CONFIG.uiUri, visibility: ['app' as const] } };
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+/**
+ * Reads a password the model chose without it passing through the conversation: the model
+ * names a local file (whole file, or one KEY=value line of an env file). Only regular files
+ * under the home directory, at most 64 KiB, are accepted. The value is never returned.
+ */
+function readPasswordFile(file: string, key?: string): string {
+  const home = process.env.HOME ?? '';
+  const abs = path.resolve(file);
+  if (!home || !(abs === home || abs.startsWith(home + path.sep))) {
+    throw new ToolError('The password file must be inside the home directory.');
+  }
+  const st = fs.statSync(abs, { throwIfNoEntry: false });
+  if (!st || !st.isFile()) throw new ToolError('There is no such password file.');
+  if (st.size > 64 * 1024) throw new ToolError('That password file is too large.');
+  let raw = fs.readFileSync(abs, 'utf8');
+  if (key) {
+    const line = raw.split(/\r?\n/).find((l) => l.startsWith(`${key}=`));
+    if (line === undefined) throw new ToolError(`The file has no ${key}= line.`);
+    raw = line.slice(key.length + 1);
+  }
+  const value = raw.trim().replace(/^(["'])(.*)\1$/, '$2');
+  if (!value) throw new ToolError('The password in that file is empty.');
+  if (value.length > 500) throw new ToolError('That password is longer than 500 characters.');
+  return value;
+}
+
 const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
 
@@ -623,7 +649,9 @@ export function registerTools(server: McpServer): void {
     {
       title: 'Add a login to the vault',
       description:
-        'Prepare a new login. A card appears with the details and a freshly generated password; nothing is saved until the user presses Save. Do not pass a password — one is generated for them.',
+        CONFIG.directCreate
+          ? 'Save a NEW login right away (never overwrites: an item with the same name is refused). Without password_file a strong password is generated. To store a password you already set somewhere (e.g. an account you just created), write it to a file under the home directory and pass password_file (optionally password_key for a KEY=value env file) — never put a password in the tool call itself. The value is never returned.'
+          : 'Prepare a new login. A card appears with the details and a freshly generated password (or the one read from password_file); nothing is saved until the user presses Save. Never pass a password in the call itself.',
       inputSchema: {
         name: z.string().min(1).max(200).describe('What to call the item, e.g. the site or service name.'),
         username: z.string().max(200).optional(),
@@ -632,6 +660,8 @@ export function registerTools(server: McpServer): void {
         notes: z.string().max(4000).optional(),
         favorite: z.boolean().optional(),
         passphrase: z.boolean().optional().describe('Generate a word-based passphrase instead of characters.'),
+        password_file: z.string().max(1000).optional().describe('Absolute path of a local file under the home directory holding the password to store.'),
+        password_key: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(100).optional().describe('With password_file: read the value of this KEY=value line instead of the whole file.'),
       },
       annotations: { title: 'Add a login to the vault', ...WRITES },
       _meta: UI,
@@ -640,9 +670,50 @@ export function registerTools(server: McpServer): void {
       run('vault_create_login', async () => {
         await requireReady();
         if (args.folder_id && !isUuid(args.folder_id)) throw new ToolError('That is not a folder id.', 'Use vault_list_folders.');
-        const password = await vault.generate({ length: 20, special: true, passphrase: args.passphrase });
+        if (args.password_key && !args.password_file) throw new ToolError('password_key needs password_file.');
+        const fromFile = Boolean(args.password_file);
+        const password = args.password_file
+          ? readPasswordFile(args.password_file, args.password_key)
+          : await vault.generate({ length: 20, special: true, passphrase: args.passphrase });
         const folders = await vault.listFolders();
         const folder = folders.find((f) => f.id === args.folder_id);
+        if (CONFIG.directCreate) {
+          const orgId = CONFIG.defaultOrgId || null;
+          const clash = await vault.findByExactName(args.name, orgId);
+          if (clash.length) {
+            throw new ToolError(
+              `An item called "${args.name}" already exists, and this tool never overwrites.`,
+              'Pick a different name, or let the user change the existing item.',
+            );
+          }
+          const created = await vault.createLogin({
+            name: args.name,
+            username: args.username,
+            password,
+            uri: args.uri,
+            folderId: orgId ? null : (args.folder_id ?? null),
+            notes: args.notes,
+            favorite: args.favorite,
+            organizationId: orgId,
+            collectionIds: orgId ? CONFIG.defaultCollectionIds : undefined,
+          });
+          const s0 = new Sanitizer();
+          const done = {
+            id: created.id,
+            name: s0.clean(args.name, 'name'),
+            username: s0.clean(args.username, 'username'),
+            site: s0.cleanUriHost(args.uri, 'site'),
+            sharedViaOrganisation: Boolean(orgId),
+            passwordSource: fromFile ? 'file' : 'generated',
+            saved: true,
+          };
+          return ok(envelope(done, s0.warnings, { hint: 'Saved. The password was not returned.' }), {
+            view: 'item',
+            itemId: created.id,
+            item: vault.toCardItem(created, folders),
+            saved: true,
+          });
+        }
         const draft = pending.create(
           'create',
           {
@@ -668,7 +739,7 @@ export function registerTools(server: McpServer): void {
           username: s.clean(args.username, 'username'),
           site: s.cleanUriHost(args.uri, 'site'),
           folder: s.clean(folder?.name, 'folder'),
-          passwordGenerated: true,
+          passwordGenerated: !fromFile,
           saved: false,
         };
         return ok(

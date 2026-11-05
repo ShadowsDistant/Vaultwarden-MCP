@@ -88,6 +88,16 @@ export const CONFIG = {
   promptCmd: process.env.VW_MCP_PROMPT_CMD ?? '',
   /** Override the clipboard helper (tests point this at a stand-in). */
   clipboardCmd: process.env.VW_MCP_CLIPBOARD_CMD ?? '',
+  /**
+   * Save new logins right away instead of staging a card draft. Only ever creates: an item
+   * with the same name in the target organisation is refused, never overwritten. Meant for
+   * hosts without MCP Apps cards (Claude Code), where a draft could never be saved.
+   */
+  directCreate: flag('VW_MCP_DIRECT_CREATE'),
+  /** Organisation new logins go to (the user only sees items shared via an org collection). */
+  defaultOrgId: (process.env.VW_MCP_DEFAULT_ORG ?? '').trim(),
+  /** Collection ids (comma-separated) new logins go to; required with an organisation. */
+  defaultCollectionIds: (process.env.VW_MCP_DEFAULT_COLLECTIONS ?? '').split(',').map((x) => x.trim()).filter(Boolean),
   /** Lifetime of a pending create/edit/delete action or draft. */
   pendingTtlMs: num('VW_MCP_PENDING_TTL_MS', 10 * 60_000),
   /** Seconds a revealed secret stays on screen in the card. */

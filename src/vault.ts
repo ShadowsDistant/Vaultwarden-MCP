@@ -249,6 +249,14 @@ export async function searchItems(q: SearchQuery): Promise<{ items: BwItem[]; tr
   return { items: items.slice(0, q.limit), truncated: total > q.limit, total };
 }
 
+/** Live (non-trashed) items whose name matches exactly, case-insensitive, within an org (or personal vault). */
+export async function findByExactName(name: string, organizationId: string | null): Promise<BwItem[]> {
+  requireUnlocked();
+  const want = name.trim().toLowerCase();
+  const items = await allItems(false);
+  return items.filter((i) => String(i.name ?? '').trim().toLowerCase() === want && (i.organizationId ?? null) === (organizationId || null));
+}
+
 export type SecretField = 'password' | 'totp' | 'notes';
 
 /**
@@ -344,6 +352,8 @@ export type NewLogin = {
   folderId?: string | null;
   notes?: string;
   favorite?: boolean;
+  organizationId?: string | null;
+  collectionIds?: string[];
 };
 
 function buildLoginPayload(input: NewLogin): Record<string, unknown> {
@@ -355,6 +365,7 @@ function buildLoginPayload(input: NewLogin): Record<string, unknown> {
     notes: input.notes ?? null,
     favorite: Boolean(input.favorite),
     folderId: input.folderId ?? null,
+    ...(input.organizationId ? { organizationId: input.organizationId, collectionIds: input.collectionIds ?? [] } : {}),
     reprompt: 0,
     fields: [],
     login: {

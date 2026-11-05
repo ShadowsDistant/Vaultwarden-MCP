@@ -296,7 +296,8 @@ switch (cmd) {
     const item = {
       object: 'item',
       id: randomUUID(),
-      organizationId: null,
+      organizationId: payload.organizationId ?? null,
+      collectionIds: payload.collectionIds ?? [],
       folderId: payload.folderId ?? null,
       type: payload.type ?? 1,
       name: payload.name,
