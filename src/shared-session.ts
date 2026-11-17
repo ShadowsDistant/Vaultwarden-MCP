@@ -62,8 +62,11 @@ function dpapi(mode: 'protect' | 'unprotect', input: string): Promise<string | n
       } catch {
         /* already gone */
       }
+      log.warn('the DPAPI helper timed out', { mode });
       resolve(null);
-    }, 20_000);
+      // Half a second on a desktop; a busy, cold machine can take far longer to start PowerShell
+      // and load the assembly, and giving up early just means asking for the password again.
+    }, 60_000);
     child.stdout.on('data', (d) => (out += String(d)));
     // PowerShell's error text never contains the input, which only ever arrives on stdin.
     child.stderr.on('data', (d) => (err += String(d)));
