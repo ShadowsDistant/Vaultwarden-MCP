@@ -41,7 +41,7 @@ jobs:
 
       # No real vault and no network: the suite drives the server over stdio against a fake CLI.
       - name: Test
-        run: npm test
+        run: node scripts/test-ci.mjs
 
       - name: Package
         run: npm run pack
@@ -68,7 +68,7 @@ jobs:
       - name: Build
         run: npm run build
       - name: Test
-        run: npm test
+        run: node scripts/test-ci.mjs
 
   # The Settings app compiles with the C# compiler built into Windows. It is built twice: once
   # with the newest compiler on the runner, and once with the .NET Framework's own C# 5
