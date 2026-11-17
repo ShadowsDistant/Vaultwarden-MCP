@@ -96,7 +96,10 @@ test('one unlock serves every server process, and one lock locks them all', { sk
   t.after(() => b.close());
 
   assert.equal((await a.callJson('vault_unlock')).json.data.state, 'unlocked');
-  assert.ok(fs.existsSync(path.join(a.home, 'session.json')), 'the shared copy is written');
+  assert.ok(
+    fs.existsSync(path.join(a.home, 'session.json')),
+    `the shared copy is written; log: ${a.logText().split(/\r?\n/).filter((l) => /shar|DPAPI|protect/i.test(l)).join(' || ').slice(0, 700)}`,
+  );
   const raw = fs.readFileSync(path.join(a.home, 'session.json'), 'utf8');
   assert.ok(!raw.includes(a.vault().session), 'the key is not stored in the clear');
 

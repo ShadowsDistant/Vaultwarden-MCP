@@ -55,6 +55,7 @@ function dpapi(mode: 'protect' | 'unprotect', input: string): Promise<string | n
       { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
     );
     let out = '';
+    let err = '';
     const timer = setTimeout(() => {
       try {
         child.kill();
@@ -64,12 +65,16 @@ function dpapi(mode: 'protect' | 'unprotect', input: string): Promise<string | n
       resolve(null);
     }, 20_000);
     child.stdout.on('data', (d) => (out += String(d)));
-    child.on('error', () => {
+    // PowerShell's error text never contains the input, which only ever arrives on stdin.
+    child.stderr.on('data', (d) => (err += String(d)));
+    child.on('error', (e) => {
       clearTimeout(timer);
+      log.warn('the DPAPI helper could not start', { mode, error: e.message });
       resolve(null);
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      if (code !== 0 || !out) log.warn('the DPAPI helper failed', { mode, exit: code, stderr: err.trim().slice(0, 400) });
       resolve(code === 0 && out ? out : null);
     });
     child.stdin.write(input);
@@ -109,8 +114,16 @@ export function stamp(): string {
 }
 
 /** Saves the key for the other processes. Best effort: failing only means they ask again. */
+let toldUnsupported = false;
+
 export async function publish(key: string, mode: LockMode): Promise<void> {
-  if (!sharingSupported()) return;
+  if (!sharingSupported()) {
+    if (!toldUnsupported && process.platform === 'win32') {
+      toldUnsupported = true;
+      log.info('vault sessions are not shared between processes', { helper: fs.existsSync(script()), off: process.env.VW_MCP_SHARED_SESSION === '0' });
+    }
+    return;
+  }
   const blob = await dpapi('protect', key);
   if (!blob) {
     log.warn('could not protect the session for sharing');
