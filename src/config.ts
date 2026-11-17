@@ -43,7 +43,15 @@ function flag(name: string): boolean {
   return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
-export type RevealMode = 'ask' | 'off';
+/**
+ * Variables that `VW_MCP_BW_ENV` may never set on the CLI child.
+ *
+ * The child's environment is built from scratch precisely so that `NODE_OPTIONS` cannot slip a
+ * preload script into the process holding the vault key. An escape hatch that could put it
+ * straight back would undo that, so these are refused whatever the hatch says. So are the
+ * variables this server owns: the session key and where the CLI keeps its data.
+ */
+const BW_ENV_DENY = /^(NODE_OPTIONS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|ELECTRON_RUN_AS_NODE|BW_SESSION|BITWARDENCLI_APPDATA_DIR|BW_NOINTERACTION|PATH|PATHEXT|COMSPEC)$/i;
 
 export const CONFIG = {
   home,
@@ -52,25 +60,20 @@ export const CONFIG = {
   /** Node used to run bw. Claude Desktop extensions run on its bundled Node; reuse it. */
   nodeExe: process.env.VW_MCP_NODE_PATH ?? process.execPath,
   configFile: path.join(home, 'config.json'),
+  /** Behaviour and permissions, written by the Settings app. See settings.ts. */
+  settingsFile: path.join(home, 'settings.json'),
+  /** What the server last reported about itself, for the Settings app to show. */
+  statusFile: path.join(home, 'status.json'),
   logFile: process.env.VW_MCP_LOG_FILE ?? path.join(home, 'logs', 'server.log'),
-  /**
-   * Minutes of inactivity before the vault locks. 0 means it does not lock on a timer — it
-   * closes when this process does, which is when Claude Desktop quits. That is the default
-   * because an idle timer that fires mid-conversation is a password prompt in the middle of
-   * something, and the session never outlives the app either way.
-   */
-  idleLockMinutes: num('VW_MCP_IDLE_LOCK_MIN', 0),
-  /** `ask` = a native Yes/No dialog for every model-visible reveal; `off` = always refuse. */
-  revealMode: ((): RevealMode => (process.env.VW_MCP_MODEL_REVEAL ?? 'ask').trim().toLowerCase() === 'off' ? 'off' : 'ask')(),
   /** Allow a plain-http server URL for hosts other than localhost. */
   allowHttp: flag('VW_MCP_ALLOW_HTTP'),
   /** Extra CA bundle for a self-hosted instance behind a private CA. */
   caFile: process.env.VW_MCP_CA_FILE ?? '',
   /**
    * Extra environment for the CLI child only, as a JSON object. The child's environment is
-   * built from scratch rather than inherited, which is deliberate — but a self-hosted setup
-   * sometimes needs one more variable reaching the CLI and nothing else. Anything named here
-   * is added last, so it can also override the defaults.
+   * built from scratch rather than inherited, which is deliberate, but a self-hosted setup
+   * sometimes needs one more variable reaching the CLI and nothing else. Names in
+   * `BW_ENV_DENY` are dropped.
    */
   bwEnv: ((): Record<string, string> => {
     const raw = process.env.VW_MCP_BW_ENV;
@@ -78,7 +81,9 @@ export const CONFIG = {
     try {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const out: Record<string, string> = {};
-      for (const [k, v] of Object.entries(parsed)) if (typeof v === 'string') out[k] = v;
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'string' && !BW_ENV_DENY.test(k)) out[k] = v;
+      }
       return out;
     } catch {
       return {};
@@ -90,10 +95,6 @@ export const CONFIG = {
   clipboardCmd: process.env.VW_MCP_CLIPBOARD_CMD ?? '',
   /** Lifetime of a pending create/edit/delete action or draft. */
   pendingTtlMs: num('VW_MCP_PENDING_TTL_MS', 10 * 60_000),
-  /** Seconds a revealed secret stays on screen in the card. */
-  revealSeconds: num('VW_MCP_REVEAL_SECONDS', 30),
-  /** Seconds after which a copied secret is cleared from the clipboard. */
-  clipboardClearSeconds: num('VW_MCP_CLIPBOARD_CLEAR_SECONDS', 30),
   /**
    * Where the dialog and clipboard helpers live. A packed extension ships only dist/, so the
    * build copies them to dist/scripts; a source checkout has them one level up. Whichever

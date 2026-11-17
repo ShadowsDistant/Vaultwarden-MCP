@@ -193,7 +193,7 @@ test('reveal can be switched off entirely at install time', async (t) => {
   const { result, json } = await s.callJson('vault_reveal_secret', { id: GITHUB, field: 'password', reason: 'test' });
   assertNoSecrets(result, 'reveal with reveal disabled');
   assert.equal(result.isError, true);
-  assert.match(json.error, /switched off/i);
+  assert.match(json.error, /not allowed/i);
   assert.equal(s.prompts().filter((p) => p.kind === 'confirm').length, 0);
 });
 
@@ -201,14 +201,29 @@ test('a generated password goes to the card, not the transcript', async (t) => {
   const s = await unlocked();
   t.after(() => s.close());
 
-  const { json, structured } = await s.callJson('vault_generate_password', { length: 24, special: true });
+  const { result, json, structured } = await s.callJson('vault_generate_password', { length: 24, special: true });
   // The model learns the shape of what was made, and nothing else.
   assert.equal(json.data.length, 24);
   assert.equal(json.data.kind, 'password');
   assert.ok(json.data.strength);
   assert.equal(json.data.secret, undefined);
-  assert.ok(!JSON.stringify(json).includes(structured.secret), 'the generated password reached the model');
-  assert.equal(structured.secret.length, 24);
+  assert.equal(structured.secret, undefined, 'structuredContent is model-visible too');
+  assert.ok(structured.generatedId);
+
+  // The card trades the id for the value through an app-only tool.
+  const secret = await s.cardSecret(structured);
+  assert.equal(secret.length, 24);
+  assert.ok(!JSON.stringify(result).includes(secret), 'the generated password reached the model');
+});
+
+test('a draft never carries its generated password in the model-visible result', async (t) => {
+  const s = await unlocked();
+  t.after(() => s.close());
+
+  const { result, structured } = await s.callJson('vault_create_login', { name: 'Draft leak check' });
+  const secret = await s.cardSecret(structured);
+  assert.ok(secret.length >= 20);
+  assert.ok(!JSON.stringify(result).includes(secret), 'the draft password reached the model');
 });
 
 test('the card copies a secret to the clipboard without it crossing the transcript', async (t) => {

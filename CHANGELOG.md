@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.3.0 — 2026-11-17
+
+### A Settings app
+
+`Vaultwarden-MCP-Settings.exe` is a small Windows app for deciding what Claude may do, without
+asking Claude to do it. It ships inside the extension and on the release page. Open it from the
+sliders button on the vault card, by asking Claude to open your vault settings, or by running it
+directly. It shows which vault the server is using and whether it's running, works in light and
+dark mode, and saves with one click. Changes apply to Claude's next request.
+
+On macOS and Linux the same settings live in `~/.vaultwarden-mcp/settings.json`.
+
+### You choose when Claude gets a password
+
+Three choices for when Claude asks to read or copy a password, code or note: *Ask me every time*
+(the default, and the old behaviour), *Ask once per login* until the vault locks, or *Never*.
+
+### Trusted sites
+
+Add sites, such as `github.com`, whose password and one-time code Claude may read or copy without
+asking. The rules are strict on purpose: every address on a login must be trusted, lookalikes and
+shared hosting suffixes such as `github.io` are refused, notes are never covered, and logins marked
+"master password re-prompt" are always excluded. [SECURITY.md](SECURITY.md#trusted-sites) has the
+reasoning.
+
+### Copy without Claude seeing it
+
+New `vault_copy_secret` puts a password on your clipboard with the same permission check, and the
+value never enters the conversation. Claude is told to prefer it over reading a password out.
+
+### Text-only mode
+
+Turn cards off and Claude answers in plain text. Creating, editing and trashing items then ask in a
+desktop window, a new login's password goes straight to your clipboard, and generated passwords do
+too. The same happens automatically in apps that can't draw cards, where writes previously
+couldn't be confirmed at all.
+
+### A read-only switch
+
+Turn off *Let Claude prepare changes* and every write tool refuses, including the confirm button
+on a card staged before you flipped it.
+
+### Security fixes
+
+- **Generated passwords no longer travel in `structuredContent`.** `vault_generate_password` and
+  `vault_create_login` put the new password in the structured half of their result, which this
+  project's own rules treat as model-visible. They now return an id, and the card fetches the value
+  through an app-only tool. A test asserts the value appears nowhere in either result.
+- **Notes Claude drafts are shown before they're saved.** A draft's notes were saved without ever
+  being displayed. The card now has a notes field, and confirmation windows list them.
+- **Moving a login onto a trusted site is called out** in the confirmation, since it changes what
+  Claude can read without asking.
+- **`VW_MCP_BW_ENV` can no longer set** `NODE_OPTIONS`, `PATH`, `BW_SESSION` and similar names in
+  the CLI's environment.
+- **The card opens only `http` and `https` links.** A stored `javascript:` or `file:` address is
+  shown as text.
+- **A settings file that won't parse locks everything down** rather than falling back to defaults.
+
+### Easier setup
+
+The README now walks through installing in Claude Desktop step by step, and adding the server to
+Claude Code, Cursor, VS Code and Windsurf. The extension asks only for your vault address and
+email; the old *idle lock* and *model reveal* options moved to the Settings app. If you set them
+when installing an earlier version, set them again there.
+
 ## 0.2.0 — 2026-09-04
 
 ### The reveal button did nothing

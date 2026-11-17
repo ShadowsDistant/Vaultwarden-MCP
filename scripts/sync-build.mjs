@@ -19,7 +19,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const build = process.env.VW_MCP_BUILD_DIR ?? path.join(os.homedir(), '.vaultwarden-mcp', 'build');
 const args = process.argv.slice(2);
 
-const COPY = ['src', 'ui', 'scripts', 'assets', 'test', 'package.json', 'tsconfig.json', '.npmrc'];
+const COPY = ['src', 'ui', 'scripts', 'assets', 'test', 'settings-app', 'package.json', 'tsconfig.json', '.npmrc'];
 
 fs.mkdirSync(build, { recursive: true });
 for (const entry of COPY) {

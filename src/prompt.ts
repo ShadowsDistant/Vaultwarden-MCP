@@ -45,7 +45,9 @@ const DIALOG_TIMEOUT_MS = 3 * 60_000;
  */
 let open = false;
 const recent: number[] = [];
-const MAX_DIALOGS = 5;
+// Ten in ten minutes: enough that someone working through their logins is never stopped, few
+// enough that a model looping on requests cannot keep a window in front of them indefinitely.
+const MAX_DIALOGS = 10;
 const WINDOW_MS = 10 * 60_000;
 
 export class PromptError extends Error {

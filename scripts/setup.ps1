@@ -44,7 +44,7 @@ if ($Clean -and (Test-Path $build)) {
 New-Item -ItemType Directory -Force -Path $build | Out-Null
 
 # Copy sources across. node_modules and dist stay where they are so an incremental run is fast.
-foreach ($entry in 'src', 'ui', 'scripts', 'assets', 'test') {
+foreach ($entry in 'src', 'ui', 'scripts', 'assets', 'test', 'settings-app') {
   $from = Join-Path $repo $entry
   if (-not (Test-Path $from)) { continue }
   $to = Join-Path $build $entry
@@ -120,12 +120,21 @@ try {
   Write-Host 'bundling the card...'
   $code = Invoke-Native $node @((Join-Path $build 'scripts\build-ui.mjs'))
   if ($code -ne 0) { throw "The card bundle failed." }
+
+  # The Settings app is a convenience, not a dependency: the server runs without it, and the
+  # same choices can be made by editing settings.json. So a failed build warns and carries on.
+  Write-Host 'building the Settings app...'
+  $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $code = Invoke-Native $ps @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $build 'scripts\build-settings.ps1'), '-Out', (Join-Path $build 'dist\settings'))
+  if ($code -ne 0) { Write-Warning 'The Settings app did not build. Everything else works; settings.json can be edited by hand.' }
 } finally {
   Pop-Location
 }
 
 Write-Host ''
 Write-Host "Built: $(Join-Path $build 'dist\index.js')"
+$settingsExe = Join-Path $build 'dist\settings\Vaultwarden-MCP-Settings.exe'
+if (Test-Path $settingsExe) { Write-Host "Settings app: $settingsExe" }
 
 if ($Install) {
   if (-not $Server) { throw "Pass -Server https://your-vault.example.com so the server knows which instance to use." }

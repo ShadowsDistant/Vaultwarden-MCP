@@ -35,6 +35,7 @@ type StatusInfo = {
   lastSync?: string;
   autoLockMinutes?: number;
   locksInSeconds?: number;
+  permissions?: { secrets?: string; trustedSites?: number; changes?: string; problem?: string };
 };
 
 type Payload = {
@@ -55,6 +56,8 @@ type Payload = {
   mode?: string;
   fields?: Record<string, unknown>;
   secret?: string;
+  generatedId?: string;
+  canOpenSettings?: boolean;
   strength?: Strength;
   folders?: { id: string | null; name: string }[];
   rows?: { label: string; before?: string; after?: string }[];
@@ -144,7 +147,28 @@ const ICONS = {
   trash: ['M4.5 7h15', 'M9.5 7V5.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V7', 'M6.5 7l.8 12a1 1 0 0 0 1 .9h7.4a1 1 0 0 0 1-.9L17.5 7'],
   star: ['M12 4.2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 9.9l5.4-.8L12 4.2Z'],
   plus: ['M12 5.5v13', 'M5.5 12h13'],
+  sliders: ['M4 7h9', 'M17 7h3', 'M15 5v4', 'M4 17h3', 'M11 17h9', 'M9 15v4'],
 };
+
+/**
+ * Only web addresses are handed to the host to open. A stored URI is whatever the item's
+ * author typed, and `javascript:`, `file:` or a custom scheme has no business being one click
+ * away in a password manager.
+ */
+function webUrl(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const u = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function openSettings(): Promise<void> {
+  const r = await call('vault_ui_open_settings');
+  if (r.error) showError(String(r.hint ?? r.error));
+}
 
 /**
  * A button that shows it is working.
@@ -525,6 +549,18 @@ function renderStatus(p: Payload): Node {
   main.append(col);
   out.append(main);
 
+  const perms = st.permissions;
+  if (perms && st.state === 'unlocked') {
+    const bits = [`Passwords: ${perms.secrets ?? 'ask every time'}`];
+    if (perms.trustedSites) bits.push(`${perms.trustedSites} trusted site${perms.trustedSites === 1 ? '' : 's'}`);
+    if (perms.changes && perms.changes.startsWith('switched off')) bits.push('changes off');
+    const line = el('div', 'banner');
+    line.append(icon(ICONS.shield));
+    line.append(document.createTextNode(bits.join(' · ')));
+    out.append(line);
+  }
+  if (perms?.problem) out.append(el('div', 'note warn', perms.problem));
+
   if (p.error === 'cancelled') {
     out.append(el('div', 'note', 'The password window was dismissed. Nothing was changed.'));
   } else if (p.error === 'bad_password') {
@@ -559,6 +595,11 @@ function renderStatus(p: Payload): Node {
     actions.append(button('Open vault', 'primary', () => act('vault_ui_search'), 'unlock', 'Loading'));
     actions.append(button('Lock now', 'ghost', () => act('vault_ui_lock'), 'lock', 'Locking'));
     actions.append(button('Sync', 'ghost', () => act('vault_ui_sync'), 'sync', 'Syncing'));
+  }
+  if (p.canOpenSettings) {
+    const gear = iconButton('sliders', 'Vaultwarden MCP Settings', () => openSettings());
+    gear.style.marginLeft = 'auto';
+    actions.append(gear);
   }
   if (actions.childElementCount) out.append(actions);
   return out;
@@ -658,6 +699,7 @@ function renderItem(p: Payload): Node {
   if (it.hasTotp) fields.append(totpField(it, p.canCopy !== false));
 
   const uris = it.uris ?? it.sites ?? [];
+  const site = webUrl(uris[0]);
   if (uris.length) {
     const f = el('div', 'field');
     f.append(el('div', 'field-label', 'Site'));
@@ -671,18 +713,25 @@ function renderItem(p: Payload): Node {
     link.style.color = 'var(--accent)';
     link.style.cursor = 'pointer';
     link.title = uris[0];
-    link.addEventListener('click', () => {
-      void app.openLink({ url: uris[0] }).catch(() => showError('This host would not open the link.'));
-    });
+    if (site) {
+      link.addEventListener('click', () => {
+        void app.openLink({ url: site }).catch(() => showError('This host would not open the link.'));
+      });
+    } else {
+      link.style.color = 'inherit';
+      link.style.cursor = 'default';
+    }
     f.append(link);
-    const actions = el('div', 'field-actions');
-    actions.append(
-      iconButton('link', 'Open site', async () => {
-        const r = await app.openLink({ url: uris[0] }).catch(() => ({ isError: true }));
-        if (r?.isError) showError('This host would not open the link. The address is above; copy it if you need it.');
-      }),
-    );
-    f.append(actions);
+    if (site) {
+      const actions = el('div', 'field-actions');
+      actions.append(
+        iconButton('link', 'Open site', async () => {
+          const r = await app.openLink({ url: site }).catch(() => ({ isError: true }));
+          if (r?.isError) showError('This host would not open the link. The address is above; copy it if you need it.');
+        }),
+      );
+      f.append(actions);
+    }
     fields.append(f);
   }
 
@@ -838,6 +887,7 @@ function renderDraft(p: Payload): Node {
   const pwInput = el('input');
   pwInput.type = 'text';
   pwInput.value = String(p.secret ?? '');
+  pwInput.placeholder = 'Generating…';
   pwInput.spellcheck = false;
   pwInput.autocapitalize = 'off';
   pwInput.setAttribute('autocomplete', 'off');
@@ -865,6 +915,17 @@ function renderDraft(p: Payload): Node {
   };
   updateMeter();
   pwInput.addEventListener('input', updateMeter);
+  // The model-visible result never carries the password; the card collects it by draft id.
+  if (!pwInput.value && p.draftId) {
+    void call('vault_ui_draft_secret', { draft_id: p.draftId }).then((r) => {
+      if (typeof r.secret === 'string' && !pwInput.value) {
+        pwInput.value = r.secret;
+        updateMeter();
+      } else if (r.error) {
+        pwInput.placeholder = 'Press refresh to generate one';
+      }
+    });
+  }
 
   // Folder picker, when the vault has folders.
   let folderSelect: HTMLSelectElement | undefined;
@@ -886,6 +947,17 @@ function renderDraft(p: Payload): Node {
     form.append(wrap);
   }
 
+  // Notes Claude drafted are shown and editable. Saving a field the person never saw would let
+  // anything at all ride into their vault.
+  const notesWrap = el('div', 'form-field');
+  notesWrap.append(el('div', 'form-label', 'Notes'));
+  const notesInput = el('textarea');
+  notesInput.value = String(f.notes ?? '');
+  notesInput.placeholder = 'Optional';
+  notesInput.rows = 2;
+  notesWrap.append(notesInput);
+  form.append(notesWrap);
+
   out.append(form);
 
   const actions = el('div', 'actions');
@@ -900,7 +972,7 @@ function renderDraft(p: Payload): Node {
         uri: uriInput.value.trim(),
         password: pwInput.value,
         folder_id: folderSelect?.value || null,
-        notes: String(f.notes ?? ''),
+        notes: notesInput.value,
         favorite: Boolean(f.favorite),
       });
       if (r.error) {
@@ -1039,6 +1111,7 @@ function renderGenerator(p: Payload): Node {
   const input = el('input');
   input.type = 'text';
   input.value = String(p.secret ?? '');
+  input.placeholder = 'Generating…';
   input.readOnly = true;
   input.spellcheck = false;
   row.append(input);
@@ -1061,6 +1134,16 @@ function renderGenerator(p: Payload): Node {
   m.append(meter(localStrength(String(p.secret ?? ''))));
   wrap.append(m);
   out.append(wrap);
+  if (!input.value && p.generatedId) {
+    void call('vault_ui_generated', { id: p.generatedId }).then((r) => {
+      if (typeof r.secret === 'string') {
+        input.value = r.secret;
+        m.replaceChildren(meter(localStrength(r.secret)));
+      } else {
+        input.placeholder = 'Expired. Press refresh for a new one.';
+      }
+    });
+  }
 
   const banner = el('div', 'banner');
   banner.append(icon(ICONS.info));
@@ -1357,6 +1440,8 @@ function demoCall(name: string, args: Record<string, unknown>): Payload & Record
     case 'vault_ui_copy':
     case 'vault_ui_copy_value':
       return { copied: 'value', clearsInSeconds: 30 };
+    case 'vault_ui_generated':
+    case 'vault_ui_draft_secret':
     case 'vault_ui_generate': {
       const alphabet = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*';
       const bytes = crypto.getRandomValues(new Uint32Array(20));
@@ -1379,6 +1464,8 @@ function demoCall(name: string, args: Record<string, unknown>): Payload & Record
       return { view: 'done', message: 'Done.' };
     case 'vault_ui_lock':
       return demoPayload('locked') as Payload & Record<string, unknown>;
+    case 'vault_ui_open_settings':
+      return { opened: true };
     default:
       return demoPayload('status') as Payload & Record<string, unknown>;
   }
@@ -1419,7 +1506,6 @@ function demoPayload(kind: string): Payload {
         draftId: 'demo',
         mode: 'create',
         fields: { name: 'Fastmail', username: 'shado@fastmail.com', uri: 'https://app.fastmail.com', folderId: null },
-        secret: 'K7#mQp2vLx9!Zr4Tn8Wd',
         folders: [
           { id: '1', name: 'Development' },
           { id: '2', name: 'Personal' },
@@ -1451,9 +1537,9 @@ function demoPayload(kind: string): Payload {
         note: 'The server keeps trashed items for 30 days.',
       };
     case 'generator':
-      return { view: 'generator', meta: { kind: 'password' }, secret: 'q4$Vn8ZmTd2!Lw7Kx3Rb', options: { length: 20, special: true } };
+      return { view: 'generator', meta: { kind: 'password' }, generatedId: 'demo', options: { length: 20, special: true } };
     case 'locked':
-      return { view: 'status', status: { state: 'locked', server: 'bitwarden.pikapod.net', email: 'shado@example.com' }, canPrompt: true };
+      return { view: 'status', status: { state: 'locked', server: 'bitwarden.pikapod.net', email: 'shado@example.com' }, canPrompt: true, canOpenSettings: true };
     case 'unconfigured':
       return { view: 'status', status: { state: 'unconfigured' } };
     default:
@@ -1467,9 +1553,11 @@ function demoPayload(kind: string): Payload {
           lastSync: new Date(Date.now() - 240_000).toISOString(),
           autoLockMinutes: 15,
           locksInSeconds: 720,
+          permissions: { secrets: 'ask every time', trustedSites: 2, changes: 'allowed, with confirmation' },
         },
         canPrompt: true,
         canCopy: true,
+        canOpenSettings: true,
       };
   }
 }

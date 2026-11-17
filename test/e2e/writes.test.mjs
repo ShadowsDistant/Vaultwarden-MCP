@@ -28,7 +28,9 @@ test('creating a login writes nothing until the card saves it', async (t) => {
   assert.match(json.hint, /Nothing has been saved/i);
   // The model never receives the generated password, only the card does.
   assert.equal(json.data.password, undefined);
-  assert.ok(structured.secret.length >= 20);
+  assert.equal(structured.password, undefined);
+  const secret = await s.cardSecret(structured);
+  assert.ok(secret.length >= 20);
   assert.equal(s.vault().items.length, before, 'the vault changed before anyone confirmed');
 
   // Now the card presses Save.
@@ -37,7 +39,7 @@ test('creating a login writes nothing until the card saves it', async (t) => {
     name: 'Fastmail',
     username: 'shado@fastmail.com',
     uri: 'https://app.fastmail.com',
-    password: structured.secret,
+    password: secret,
     folder_id: DEV_FOLDER,
   });
   assert.equal(saved.json.saved, true);
@@ -46,7 +48,7 @@ test('creating a login writes nothing until the card saves it', async (t) => {
   assert.equal(items.length, before + 1);
   const created = items.find((i) => i.name === 'Fastmail');
   assert.equal(created.login.username, 'shado@fastmail.com');
-  assert.equal(created.login.password, structured.secret);
+  assert.equal(created.login.password, secret);
   assert.equal(created.folderId, DEV_FOLDER);
   assert.equal(created.login.uris[0].uri, 'https://app.fastmail.com');
 });
@@ -56,7 +58,7 @@ test('a draft can only be saved once', async (t) => {
   t.after(() => s.close());
 
   const { json, structured } = await s.callJson('vault_create_login', { name: 'Once' });
-  const args = { draft_id: json.data.draftId, name: 'Once', password: structured.secret };
+  const args = { draft_id: json.data.draftId, name: 'Once', password: await s.cardSecret(structured) };
   const first = await s.callJson('vault_ui_save_draft', args);
   assert.equal(first.json.saved, true);
 
@@ -71,11 +73,12 @@ test('a draft expires', async (t) => {
   t.after(() => s.close());
 
   const { json, structured } = await s.callJson('vault_create_login', { name: 'Slow' });
+  const secret = await s.cardSecret(structured);
   await new Promise((r) => setTimeout(r, 700));
   const late = await s.callJson('vault_ui_save_draft', {
     draft_id: json.data.draftId,
     name: 'Slow',
-    password: structured.secret,
+    password: secret,
   });
   assert.equal(late.result.isError, true);
   assert.match(late.json.error, /expired/i);
@@ -219,5 +222,5 @@ test('a generated passphrase is words, not characters', async (t) => {
 
   const { json, structured } = await s.callJson('vault_generate_password', { passphrase: true, words: 4, separator: '.' });
   assert.equal(json.data.kind, 'passphrase');
-  assert.equal(structured.secret.split('.').length, 4);
+  assert.equal((await s.cardSecret(structured)).split('.').length, 4);
 });

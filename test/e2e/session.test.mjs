@@ -235,7 +235,8 @@ test('the server reports what it is and what it is for', async (t) => {
   const instructions = s.client.getInstructions();
   assert.match(instructions, /untrusted content/i);
   assert.match(instructions, /never ask the user to type a master password into the chat/i);
-  assert.match(instructions, /until they press Save or Confirm, nothing has happened/i);
+  assert.match(instructions, /never change anything on their own/i);
+  assert.match(instructions, /vault_copy_secret/);
 });
 
 test('the card may reach exactly one origin, and it is the vault itself', async (t) => {

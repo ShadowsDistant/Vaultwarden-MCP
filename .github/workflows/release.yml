@@ -13,7 +13,27 @@ permissions:
   contents: write
 
 jobs:
+  # The Settings app is a WPF program, so it is compiled on Windows. Everything else builds
+  # on Linux, and the two meet in the release job.
+  settings-app:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Build and self-test the Settings app
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-settings.ps1 -Out out/settings -SelfTest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: settings-app
+          path: out/settings/Vaultwarden-MCP-Settings.exe
+          if-no-files-found: error
+
   release:
+    needs: settings-app
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +56,11 @@ jobs:
       - name: Test
         run: npm test
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: settings-app
+          path: dist/settings
+
       - name: Package
         run: npm run pack
 
@@ -47,6 +72,9 @@ jobs:
             echo "Tag $TAG does not match package.json version $VERSION" >&2
             exit 1
           fi
+
+      - name: Check the bundle carries the Settings app
+        run: unzip -l out/*.mcpb | grep -q 'dist/settings/Vaultwarden-MCP-Settings.exe'
 
       # The notes are the matching section of the changelog, so the release page and the file in
       # the repository cannot drift.
@@ -64,11 +92,16 @@ jobs:
           fi
           cat release-notes.md
 
+      - name: Checksums
+        run: |
+          cp dist/settings/Vaultwarden-MCP-Settings.exe out/
+          cd out && sha256sum *.mcpb Vaultwarden-MCP-Settings.exe > SHA256SUMS.txt && cat SHA256SUMS.txt
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          gh release create "$TAG" out/*.mcpb \
+          gh release create "$TAG" out/*.mcpb out/Vaultwarden-MCP-Settings.exe out/SHA256SUMS.txt \
             --title "Vaultwarden MCP $TAG" \
             --notes-file release-notes.md

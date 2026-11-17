@@ -123,11 +123,20 @@ function bwEnvFor(env) {
   return knobs;
 }
 
-export async function startServer({ env = {}, seed = true, seedState = {}, cards = true } = {}) {
+/** Writes settings.json the way the Settings app does: whole file, then a rename. */
+export function writeSettingsFile(home, settings) {
+  const file = path.join(home, 'settings.json');
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, typeof settings === 'string' ? settings : JSON.stringify(settings, null, 2));
+  fs.renameSync(tmp, file);
+}
+
+export async function startServer({ env = {}, seed = true, seedState = {}, cards = true, settings } = {}) {
   const home = path.join(os.tmpdir(), `vw-mcp-test-${randomUUID()}`);
   const bwDir = path.join(home, 'bw');
   fs.mkdirSync(bwDir, { recursive: true });
   if (seed) seedVault(bwDir, seedState);
+  if (settings !== undefined) writeSettingsFile(home, settings);
 
   const clipFile = path.join(home, 'clipboard.txt');
   const promptLog = path.join(home, 'prompts.log');
@@ -220,6 +229,30 @@ export async function startServer({ env = {}, seed = true, seedState = {}, cards
       }
     },
     stderrText: () => stderr,
+    /**
+     * Changes settings.json under a running server. The mtime is pushed forward so the change
+     * is seen even when it lands within the file system's timestamp resolution of the last one.
+     */
+    writeSettings(settings) {
+      writeSettingsFile(home, settings);
+      const file = path.join(home, 'settings.json');
+      const t = new Date(Date.now() + Math.floor(Math.random() * 1000) + 2000);
+      fs.utimesSync(file, t, t);
+    },
+    statusFile: () => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(home, 'status.json'), 'utf8'));
+      } catch {
+        return undefined;
+      }
+    },
+    /** The secret the card would collect for a generated password or a draft. */
+    async cardSecret(structured) {
+      const r = structured.generatedId
+        ? await client.callTool({ name: 'vault_ui_generated', arguments: { id: structured.generatedId } })
+        : await client.callTool({ name: 'vault_ui_draft_secret', arguments: { draft_id: structured.draftId } });
+      return JSON.parse(r.content[0].text).secret;
+    },
     async call(name, args = {}) {
       return client.callTool({ name, arguments: args });
     },

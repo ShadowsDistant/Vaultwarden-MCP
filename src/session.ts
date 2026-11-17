@@ -3,6 +3,7 @@ import { CONFIG, readConfig, validateServerUrl } from './config.js';
 import { log } from './log.js';
 import { prompt, PromptError } from './prompt.js';
 import { clearAll as clearPending } from './pending.js';
+import { settings } from './settings.js';
 
 /**
  * Ownership of the unlocked vault.
@@ -96,8 +97,8 @@ export function touch(): void {
 function armIdleTimer(): void {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = null;
-  if (!sessionKey || CONFIG.idleLockMinutes <= 0) return;
-  const ms = CONFIG.idleLockMinutes * 60_000;
+  if (!sessionKey || settings().idleLockMinutes <= 0) return;
+  const ms = settings().idleLockMinutes * 60_000;
   const due = lastActivity + ms - Date.now();
   idleTimer = setTimeout(() => {
     void (async () => {
@@ -107,7 +108,7 @@ function armIdleTimer(): void {
         armIdleTimer();
         return;
       }
-      log.audit('idle_lock', { afterMinutes: CONFIG.idleLockMinutes });
+      log.audit('idle_lock', { afterMinutes: settings().idleLockMinutes });
       await lock().catch(() => undefined);
     })();
   }, Math.max(1000, due));
@@ -115,8 +116,8 @@ function armIdleTimer(): void {
 }
 
 export function locksInSeconds(): number | undefined {
-  if (!sessionKey || CONFIG.idleLockMinutes <= 0) return undefined;
-  const left = lastActivity + CONFIG.idleLockMinutes * 60_000 - Date.now();
+  if (!sessionKey || settings().idleLockMinutes <= 0) return undefined;
+  const left = lastActivity + settings().idleLockMinutes * 60_000 - Date.now();
   return Math.max(0, Math.round(left / 1000));
 }
 
@@ -151,7 +152,7 @@ let knownEmail: string | undefined;
  * authority, and `verifyUnlocked` proves it with a real decrypt.
  */
 export async function status(): Promise<Status> {
-  if (!CONFIG.bwJs) return { state: 'no_cli', idleLockMinutes: CONFIG.idleLockMinutes };
+  if (!CONFIG.bwJs) return { state: 'no_cli', idleLockMinutes: settings().idleLockMinutes };
   const cfg = readConfig();
 
   // While this server holds a working session there is nothing `bw status` can tell us that we
@@ -162,7 +163,7 @@ export async function status(): Promise<Status> {
       serverHost: hostOf(cfg.serverUrl),
       email: knownEmail ?? cfg.email,
       lastSync: knownLastSync,
-      idleLockMinutes: CONFIG.idleLockMinutes,
+      idleLockMinutes: settings().idleLockMinutes,
       locksInSeconds: locksInSeconds(),
     };
   }
@@ -177,7 +178,7 @@ export async function status(): Promise<Status> {
     serverHost,
     email: email ?? undefined,
     lastSync: s.lastSync ?? undefined,
-    idleLockMinutes: CONFIG.idleLockMinutes,
+    idleLockMinutes: settings().idleLockMinutes,
     locksInSeconds: locksInSeconds(),
   };
   if (!configured) return { state: 'unconfigured', ...base };

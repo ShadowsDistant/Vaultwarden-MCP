@@ -1,0 +1,436 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Vaultwarden MCP Settings"
+        Width="640" Height="860" MinWidth="520" MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource Page}"
+        Foreground="{DynamicResource Fg}"
+        FontFamily="Segoe UI Variable Text, Segoe UI"
+        FontSize="13.5"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display">
+  <Window.Resources>
+
+    <Style x:Key="SectionTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="15" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Margin" Value="2,26,0,10" />
+    </Style>
+
+    <Style x:Key="Card" TargetType="Border">
+      <Setter Property="Background" Value="{DynamicResource Surface}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="12" />
+      <Setter Property="Padding" Value="18,16" />
+    </Style>
+
+    <Style x:Key="Label" TargetType="TextBlock">
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <Style x:Key="Desc" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="LineHeight" Value="18" />
+      <Setter Property="Margin" Value="0,3,0,0" />
+    </Style>
+
+    <Style x:Key="Divider" TargetType="Border">
+      <Setter Property="Height" Value="1" />
+      <Setter Property="Background" Value="{DynamicResource Line}" />
+      <Setter Property="Margin" Value="0,14,0,14" />
+    </Style>
+
+    <!-- A toggle switch -->
+    <Style x:Key="Switch" TargetType="CheckBox">
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <Grid Width="44" Height="24" Background="Transparent">
+              <Border x:Name="Ring" CornerRadius="15" BorderBrush="{DynamicResource Accent}" BorderThickness="2" Margin="-3" Visibility="Collapsed" />
+              <Border x:Name="Track" CornerRadius="12" Background="{DynamicResource Surface3}" BorderBrush="{DynamicResource LineStrong}" BorderThickness="1" />
+              <Ellipse x:Name="Knob" Width="16" Height="16" Fill="{DynamicResource Muted}" HorizontalAlignment="Left" Margin="4,0,0,0" />
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Track" Property="Background" Value="{DynamicResource Accent}" />
+                <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource AccentFg}" />
+                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
+                <Setter TargetName="Knob" Property="Margin" Value="0,0,4,0" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="Ring" Property="Visibility" Value="Visible" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.45" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- A selectable option with a title and description -->
+    <Style x:Key="Option" TargetType="RadioButton">
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Margin" Value="0,8,0,0" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <Border x:Name="Box" CornerRadius="10" BorderThickness="1" BorderBrush="{DynamicResource Line}" Background="{DynamicResource Surface}" Padding="14,11">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid Width="18" Height="18" Margin="0,1,12,0" VerticalAlignment="Top">
+                  <Ellipse x:Name="Outer" Stroke="{DynamicResource LineStrong}" StrokeThickness="1.5" />
+                  <Ellipse x:Name="Dot" Width="8" Height="8" Fill="{DynamicResource Accent}" Visibility="Collapsed" />
+                </Grid>
+                <ContentPresenter Grid.Column="1" />
+              </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource LineStrong}" />
+              </Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                <Setter TargetName="Box" Property="Background" Value="{DynamicResource AccentSoft}" />
+                <Setter TargetName="Outer" Property="Stroke" Value="{DynamicResource Accent}" />
+                <Setter TargetName="Dot" Property="Visibility" Value="Visible" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="Box" Property="BorderThickness" Value="2" />
+                <Setter TargetName="Box" Property="Padding" Value="13,10" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- A pill in a segmented choice -->
+    <Style x:Key="Pill" TargetType="RadioButton">
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Foreground" Value="{DynamicResource Fg}" />
+      <Setter Property="Margin" Value="0,0,6,6" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <Border x:Name="B" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource Line}" Background="{DynamicResource Surface2}" Padding="12,6">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="B" Property="BorderBrush" Value="{DynamicResource LineStrong}" />
+              </Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="B" Property="Background" Value="{DynamicResource Accent}" />
+                <Setter TargetName="B" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                <Setter Property="Foreground" Value="{DynamicResource AccentFg}" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="B" Property="BorderThickness" Value="2" />
+                <Setter TargetName="B" Property="Padding" Value="11,5" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="Btn" TargetType="Button">
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Padding" Value="16,8" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Background" Value="{DynamicResource Surface}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource LineStrong}" />
+      <Setter Property="Foreground" Value="{DynamicResource Fg}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="B" CornerRadius="8" BorderThickness="1" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="B" Property="Opacity" Value="0.86" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="B" Property="Opacity" Value="0.72" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="B" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                <Setter TargetName="B" Property="BorderThickness" Value="2" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="B" Property="Opacity" Value="0.4" />
+                <Setter Property="Cursor" Value="Arrow" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="PrimaryBtn" TargetType="Button" BasedOn="{StaticResource Btn}">
+      <Setter Property="Background" Value="{DynamicResource Accent}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+      <Setter Property="Foreground" Value="{DynamicResource AccentFg}" />
+    </Style>
+
+    <Style x:Key="SmallBtn" TargetType="Button" BasedOn="{StaticResource Btn}">
+      <Setter Property="Padding" Value="10,4" />
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="FontWeight" Value="Normal" />
+    </Style>
+
+    <Style x:Key="LinkBtn" TargetType="Button">
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <TextBlock x:Name="T" Text="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}" />
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="T" Property="TextDecorations" Value="Underline" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="T" Property="TextDecorations" Value="Underline" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="{DynamicResource Surface2}" />
+      <Setter Property="Foreground" Value="{DynamicResource Fg}" />
+      <Setter Property="CaretBrush" Value="{DynamicResource Fg}" />
+      <Setter Property="SelectionBrush" Value="{DynamicResource Accent}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource LineStrong}" />
+      <Setter Property="Padding" Value="10,7" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <Border x:Name="B" CornerRadius="8" BorderThickness="1" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" Padding="{TemplateBinding Padding}">
+              <ScrollViewer x:Name="PART_ContentHost" Focusable="False" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="B" Property="BorderBrush" Value="{DynamicResource Accent}" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="ScrollBar">
+      <Setter Property="Width" Value="12" />
+      <Setter Property="MinWidth" Value="12" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Track x:Name="PART_Track" IsDirectionReversed="True" Margin="3,4">
+              <Track.Thumb>
+                <Thumb>
+                  <Thumb.Template>
+                    <ControlTemplate TargetType="Thumb">
+                      <Border CornerRadius="3" Background="{DynamicResource LineStrong}" />
+                    </ControlTemplate>
+                  </Thumb.Template>
+                </Thumb>
+              </Track.Thumb>
+            </Track>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <!-- Header -->
+    <Border Grid.Row="0" Padding="28,22,28,18" Background="{DynamicResource Page}">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Border Width="44" Height="44" CornerRadius="11" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" Margin="0,0,14,0" VerticalAlignment="Center">
+          <Image x:Name="Logo" Width="30" Height="30" RenderOptions.BitmapScalingMode="HighQuality" />
+        </Border>
+        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+          <TextBlock Text="Vaultwarden MCP" FontSize="20" FontWeight="SemiBold" FontFamily="Segoe UI Variable Display, Segoe UI" />
+          <TextBlock x:Name="StatusLine" Style="{StaticResource Desc}" Margin="0,2,0,0" Text="Reading status..." />
+        </StackPanel>
+        <Border x:Name="StatusPill" Grid.Column="2" CornerRadius="999" Padding="10,4" VerticalAlignment="Center" Background="{DynamicResource Surface3}">
+          <StackPanel Orientation="Horizontal">
+            <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{DynamicResource Faint}" />
+            <TextBlock x:Name="StatusPillText" FontSize="12" FontWeight="SemiBold" Text="Not running" />
+          </StackPanel>
+        </Border>
+      </Grid>
+    </Border>
+
+    <!-- Content -->
+    <ScrollViewer x:Name="Scroller" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+      <StackPanel Margin="28,0,22,28">
+
+        <Border x:Name="Banner" Visibility="Collapsed" CornerRadius="10" Padding="14,11" BorderThickness="1" Margin="0,0,0,4" Background="{DynamicResource WarnSoft}" BorderBrush="{DynamicResource WarnLine}">
+          <TextBlock x:Name="BannerText" TextWrapping="Wrap" LineHeight="19" />
+        </Border>
+
+        <!-- Passwords -->
+        <TextBlock Style="{StaticResource SectionTitle}" Text="Passwords" Margin="2,10,0,10" />
+        <Border Style="{StaticResource Card}">
+          <StackPanel>
+            <TextBlock Style="{StaticResource Label}" Text="When Claude asks to read or copy a password" />
+            <TextBlock Style="{StaticResource Desc}" Text="This covers passwords, one-time codes and notes. You can always reveal and copy them yourself in the vault card." />
+            <RadioButton x:Name="AccessAsk" GroupName="access" Style="{StaticResource Option}">
+              <StackPanel>
+                <TextBlock Style="{StaticResource Label}" Text="Ask me every time" />
+                <TextBlock Style="{StaticResource Desc}" Text="A window on your desktop asks before Claude gets each one." />
+              </StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="AccessSession" GroupName="access" Style="{StaticResource Option}">
+              <StackPanel>
+                <TextBlock Style="{StaticResource Label}" Text="Ask once per login" />
+                <TextBlock Style="{StaticResource Desc}" Text="You're asked the first time for each login. Locking the vault resets this." />
+              </StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="AccessNever" GroupName="access" Style="{StaticResource Option}">
+              <StackPanel>
+                <TextBlock Style="{StaticResource Label}" Text="Never" />
+                <TextBlock Style="{StaticResource Desc}" Text="Claude can't read or copy secrets, except for the trusted sites below." />
+              </StackPanel>
+            </RadioButton>
+          </StackPanel>
+        </Border>
+
+        <!-- Trusted sites -->
+        <TextBlock Style="{StaticResource SectionTitle}" Text="Trusted sites" />
+        <Border Style="{StaticResource Card}">
+          <StackPanel>
+            <TextBlock Style="{StaticResource Desc}" Margin="0" Text="For these sites, Claude can read and copy the password and one-time code without asking you. Notes are never shared this way, and logins set to re-prompt for your master password are always left out. A login only counts if every web address saved on it is trusted." />
+            <Grid Margin="0,14,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <Grid>
+                <TextBox x:Name="SiteInput" AutomationProperties.Name="Site to trust" />
+                <TextBlock x:Name="SitePlaceholder" Text="example.com" Foreground="{DynamicResource Faint}" IsHitTestVisible="False" VerticalAlignment="Center" Margin="12,0,0,0" />
+              </Grid>
+              <Button x:Name="SiteAdd" Grid.Column="1" Style="{StaticResource Btn}" Content="Add site" Margin="8,0,0,0" />
+            </Grid>
+            <TextBlock x:Name="SiteError" Visibility="Collapsed" Foreground="{DynamicResource Danger}" FontSize="12.5" TextWrapping="Wrap" Margin="2,8,0,0" />
+            <TextBlock x:Name="SiteEmpty" Style="{StaticResource Desc}" Margin="2,12,0,2" FontStyle="Italic" Text="No trusted sites. Claude follows the choice above for every login." />
+            <StackPanel x:Name="SiteList" Margin="0,6,0,0" />
+            <TextBlock x:Name="SiteRejected" Visibility="Collapsed" Foreground="{DynamicResource Danger}" FontSize="12.5" TextWrapping="Wrap" Margin="2,10,0,0" />
+            <TextBlock Style="{StaticResource Desc}" Margin="2,12,0,0" Text="Subdomains count: trusting github.com also covers gist.github.com. Shared hosting addresses such as github.io can't be trusted as a whole." />
+          </StackPanel>
+        </Border>
+
+        <!-- Chat -->
+        <TextBlock Style="{StaticResource SectionTitle}" Text="In the chat" />
+        <Border Style="{StaticResource Card}">
+          <StackPanel>
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <StackPanel Margin="0,0,16,0">
+                <TextBlock Style="{StaticResource Label}" Text="Show vault cards" />
+                <TextBlock Style="{StaticResource Desc}" Text="Interactive cards for browsing, revealing and adding passwords. When off, Claude answers in plain text and asks you to confirm changes in desktop windows." />
+                <TextBlock x:Name="CardsNote" Visibility="Collapsed" Foreground="{DynamicResource Warn}" FontSize="12.5" TextWrapping="Wrap" Margin="0,6,0,0" />
+              </StackPanel>
+              <CheckBox x:Name="Cards" Grid.Column="1" Style="{StaticResource Switch}" AutomationProperties.Name="Show vault cards" />
+            </Grid>
+            <Border Style="{StaticResource Divider}" />
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <StackPanel Margin="0,0,16,0">
+                <TextBlock Style="{StaticResource Label}" Text="Let Claude prepare changes" />
+                <TextBlock Style="{StaticResource Desc}" Text="New logins, edits, and moving items to the trash. Nothing is saved until you confirm it. When off, Claude can only look." />
+              </StackPanel>
+              <CheckBox x:Name="AllowChanges" Grid.Column="1" Style="{StaticResource Switch}" AutomationProperties.Name="Let Claude prepare changes" />
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <!-- Timers -->
+        <TextBlock Style="{StaticResource SectionTitle}" Text="Timers" />
+        <Border Style="{StaticResource Card}">
+          <StackPanel>
+            <TextBlock Style="{StaticResource Label}" Text="Lock the vault" />
+            <TextBlock Style="{StaticResource Desc}" Margin="0,3,0,10" Text="It always locks when Claude closes. It can also lock after a spell of no vault activity." />
+            <WrapPanel x:Name="IdlePills" />
+            <Border Style="{StaticResource Divider}" Margin="0,8,0,14" />
+            <TextBlock Style="{StaticResource Label}" Text="Hide a revealed password after" />
+            <WrapPanel x:Name="RevealPills" Margin="0,10,0,0" />
+            <Border Style="{StaticResource Divider}" Margin="0,8,0,14" />
+            <TextBlock Style="{StaticResource Label}" Text="Clear a copied password from the clipboard after" />
+            <TextBlock Style="{StaticResource Desc}" Margin="0,3,0,10" Text="Only if it's still there. Anything you copied since is left alone." />
+            <WrapPanel x:Name="ClipPills" />
+          </StackPanel>
+        </Border>
+
+        <!-- About -->
+        <TextBlock Style="{StaticResource SectionTitle}" Text="About" />
+        <Border Style="{StaticResource Card}">
+          <StackPanel>
+            <TextBlock Style="{StaticResource Desc}" Margin="0" Text="Claude can't change any of these settings itself. They're stored on this computer, and the server reads them before every request." />
+            <TextBlock x:Name="FilePath" FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,10,0,10" />
+            <WrapPanel>
+              <Button x:Name="OpenFolder" Style="{StaticResource SmallBtn}" Content="Open settings folder" Margin="0,0,8,0" />
+              <Button x:Name="OpenHelp" Style="{StaticResource SmallBtn}" Content="Help and setup guide" Margin="0,0,8,0" />
+              <Button x:Name="ResetDefaults" Style="{StaticResource SmallBtn}" Content="Reset to defaults" />
+            </WrapPanel>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- Footer -->
+    <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Line}" Background="{DynamicResource Surface}" Padding="28,14">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock x:Name="FooterText" VerticalAlignment="Center" TextWrapping="Wrap" Foreground="{DynamicResource Muted}" FontSize="12.5" Margin="0,0,12,0" Text="Changes apply to Claude's next request." />
+        <Button x:Name="DiscardBtn" Grid.Column="1" Style="{StaticResource Btn}" Content="Discard" Margin="0,0,8,0" />
+        <Button x:Name="SaveBtn" Grid.Column="2" Style="{StaticResource PrimaryBtn}" Content="Save" MinWidth="96" />
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

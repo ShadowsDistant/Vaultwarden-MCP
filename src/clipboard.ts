@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG, parseCommand } from './config.js';
 import { log } from './log.js';
+import { settings } from './settings.js';
 
 /**
  * Copying a secret to the OS clipboard.
@@ -71,7 +72,7 @@ export function clipboardAvailable(): boolean {
  * logging and is never the secret itself.
  */
 export async function copySecret(secret: string, label: string): Promise<{ ok: boolean; clearsInSeconds: number }> {
-  const seconds = CONFIG.clipboardClearSeconds;
+  const seconds = settings().clipboardClearSeconds;
   const r = await runHelper(['-Set'], secret);
   if (r.code !== 0) {
     log.warn('clipboard copy failed', { code: r.code, stderr: r.stderr.slice(0, 200) });

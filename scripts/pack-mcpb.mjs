@@ -38,6 +38,12 @@ if (!fs.existsSync(path.join(dist, 'ui', 'card.html'))) {
 }
 
 fs.cpSync(dist, path.join(stage, 'dist'), { recursive: true });
+// The Windows Settings app is built separately (scripts/build-settings.ps1, Windows only) into
+// dist/settings, and travels in the bundle when it is there. A bundle built without it still
+// works everywhere; settings.json is then edited by hand.
+const settingsExe = path.join(dist, 'settings', 'Vaultwarden-MCP-Settings.exe');
+if (fs.existsSync(settingsExe)) console.error('including the Settings app');
+else console.error('warning: dist/settings/Vaultwarden-MCP-Settings.exe is missing; packing without the Settings app');
 fs.copyFileSync(path.join(root, 'package.json'), path.join(stage, 'package.json'));
 for (const f of ['README.md', 'LICENSE', 'SECURITY.md']) {
   if (fs.existsSync(path.join(root, f))) fs.copyFileSync(path.join(root, f), path.join(stage, f));
@@ -87,11 +93,11 @@ const manifest = {
   description: 'Read and write a self-hosted Vaultwarden vault. Secrets stay out of the conversation.',
   long_description:
     'Connects Claude to a self-hosted Vaultwarden (or Bitwarden) vault through the official Bitwarden CLI. ' +
-    'Claude can search the vault, look items up, prepare new logins and stage edits — but it never receives a ' +
-    'password, one-time code or note. Those are shown in an inline card for you, or copied straight to your ' +
-    'clipboard by the server. Signing in and unlocking happen in a window on your desktop, so your master ' +
-    'password never enters the conversation. Nothing is written to the vault until you confirm it, and deletes ' +
-    'only ever move an item to the trash.',
+    'Claude can search the vault, look items up, copy a password to your clipboard, prepare new logins and stage ' +
+    'edits. Passwords, one-time codes and notes stay out of the conversation unless you allow it, per request or ' +
+    'for sites you trust. Signing in and unlocking happen in a window on your desktop, so your master password ' +
+    'never enters the conversation. Nothing is written to the vault until you confirm it, and deletes only ever ' +
+    'move an item to the trash. On Windows, the Vaultwarden MCP Settings app sets what Claude may do.',
   author: { name: 'ShadowsDistant', url: 'https://github.com/ShadowsDistant' },
   homepage: 'https://github.com/ShadowsDistant/Vaultwarden-MCP',
   documentation: 'https://github.com/ShadowsDistant/Vaultwarden-MCP#readme',
@@ -109,8 +115,6 @@ const manifest = {
       env: {
         VW_MCP_SERVER_URL: '${user_config.server_url}',
         VW_MCP_EMAIL: '${user_config.email}',
-        VW_MCP_IDLE_LOCK_MIN: '${user_config.idle_lock_minutes}',
-        VW_MCP_MODEL_REVEAL: '${user_config.model_reveal}',
       },
     },
   },
@@ -127,20 +131,8 @@ const manifest = {
       description: 'Used to pre-fill the sign-in window. Optional.',
       required: false,
     },
-    idle_lock_minutes: {
-      type: 'number',
-      title: 'Lock after (minutes of inactivity)',
-      description: 'Leave at 0 to lock only when Claude Desktop closes, which is the default. Set a number of minutes to also lock after that long with nothing happening.',
-      default: 0,
-      required: false,
-    },
-    model_reveal: {
-      type: 'string',
-      title: 'Let Claude read a secret when you approve it',
-      description: '"ask" lets Claude request one secret at a time, with a desktop window you must say yes to every time. "off" refuses outright; you can still reveal and copy values in the card.',
-      default: 'ask',
-      required: false,
-    },
+    // Everything else (what Claude may read, trusted sites, cards, auto-lock) lives in the
+    // Settings app and settings.json, where it can change without reinstalling the extension.
   },
   tools: [
     { name: 'vault_status', description: 'Show whether the vault is signed in, locked or unlocked' },
@@ -151,12 +143,14 @@ const manifest = {
     { name: 'vault_search', description: 'Find items by name, site or folder' },
     { name: 'vault_get_item', description: 'Show one item, without its secrets' },
     { name: 'vault_list_folders', description: 'List the vault folders' },
-    { name: 'vault_reveal_secret', description: 'Ask you, in a desktop window, to release one secret into the conversation' },
-    { name: 'vault_generate_password', description: 'Generate a password or passphrase, shown only in the card' },
+    { name: 'vault_copy_secret', description: 'Copy a password to your clipboard without Claude seeing it' },
+    { name: 'vault_reveal_secret', description: 'Read one secret into the conversation, if your settings allow it' },
+    { name: 'vault_generate_password', description: 'Generate a password or passphrase Claude never sees' },
     { name: 'vault_create_login', description: 'Prepare a new login for you to save' },
     { name: 'vault_edit_item', description: 'Prepare a change for you to confirm' },
     { name: 'vault_trash_item', description: 'Prepare to move an item to the trash' },
     { name: 'vault_restore_item', description: 'Bring an item back out of the trash' },
+    { name: 'vault_open_settings', description: 'Open the Settings app on your desktop' },
   ],
   tools_generated: false,
   compatibility: {

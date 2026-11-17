@@ -73,6 +73,35 @@ export function cancel(id: string): boolean {
 
 export function clearAll(): void {
   store.clear();
+  stash.clear();
+}
+
+/**
+ * Freshly generated passwords, waiting for the card to collect them.
+ *
+ * A generated password is not in the vault yet, but the moment it is saved it is the password
+ * to an account, so it is held to the same rule as any other secret: never in a result the
+ * model can read. That includes `structuredContent`, which this server assumes is model-visible.
+ * The model-visible tool returns only an id; the card exchanges the id for the value through an
+ * app-only tool. Ids are unguessable and expire with the pending actions.
+ */
+const stash = new Map<string, { value: string; expiresAt: number }>();
+
+export function stashSecret(value: string, now = Date.now()): string {
+  for (const [id, s] of stash) if (s.expiresAt <= now) stash.delete(id);
+  const id = randomUUID();
+  stash.set(id, { value, expiresAt: now + CONFIG.pendingTtlMs });
+  return id;
+}
+
+export function stashed(id: string, now = Date.now()): string | undefined {
+  const s = stash.get(id);
+  if (!s) return undefined;
+  if (s.expiresAt <= now) {
+    stash.delete(id);
+    return undefined;
+  }
+  return s.value;
 }
 
 export function size(now = Date.now()): number {

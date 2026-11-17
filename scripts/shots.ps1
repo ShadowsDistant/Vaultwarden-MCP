@@ -30,7 +30,7 @@ $shots = @(
   @('item', 'light', 560),
   @('item', 'dark', 560),
   @('list', 'light', 460),
-  @('draft', 'light', 720),
+  @('draft', 'light', 800),
   @('confirm', 'light', 400),
   @('delete', 'light', 420),
   @('generator', 'light', 340),
