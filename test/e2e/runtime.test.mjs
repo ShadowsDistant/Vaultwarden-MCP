@@ -5,8 +5,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { MASTER_PASSWORD, SENTINEL, startServer, unlocked, writeSettingsFile } from '../helpers/server.mjs';
+import { MASTER_PASSWORD, ROOT, SENTINEL, startServer, unlocked, writeSettingsFile } from '../helpers/server.mjs';
 
 test('the CLI runs in a worker thread when there is no Node to start it with', async (t) => {
   const s = await unlocked({ env: { VW_MCP_RUNNER: 'worker' } });
@@ -66,9 +67,27 @@ test('with trashing switched off, nothing can be moved to the trash, even from a
   assert.equal(s.vault().items.find((i) => i.id === id).deletedDate, null);
 });
 
-const windows = process.platform === 'win32';
+/**
+ * Whether DPAPI works for this account. It does on any desktop, but not always for a service
+ * account whose profile is not fully loaded, which is what a hosted CI runner is. There the
+ * server falls back to per-process sessions (logged as a warning), and these tests have nothing
+ * to test.
+ */
+function dpapiWorks() {
+  if (process.platform !== 'win32') return false;
+  const ps = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const script = path.join(ROOT, 'scripts', 'dpapi.ps1');
+  const run = (mode, input) =>
+    spawnSync(ps, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Mode', mode], { input, encoding: 'utf8', timeout: 30_000 });
+  const p = run('protect', 'probe');
+  if (p.status !== 0 || !p.stdout) return false;
+  const u = run('unprotect', p.stdout);
+  return u.status === 0 && u.stdout === 'probe';
+}
 
-test('one unlock serves every server process, and one lock locks them all', { skip: !windows && 'DPAPI is Windows only' }, async (t) => {
+const windows = dpapiWorks() || (process.platform === 'win32' ? 'DPAPI is not usable for this account' : 'DPAPI is Windows only');
+
+test('one unlock serves every server process, and one lock locks them all', { skip: windows === true ? false : windows }, async (t) => {
   const env = { VW_MCP_SHARED_SESSION: '1' };
   const a = await startServer({ env });
   t.after(() => a.close());
@@ -92,7 +111,7 @@ test('one unlock serves every server process, and one lock locks them all', { sk
   assert.equal(after.result.isError, true, 'the lock reached the first process too');
 });
 
-test('"never lock" survives a restart; any other mode does not', { skip: !windows && 'DPAPI is Windows only' }, async (t) => {
+test('"never lock" survives a restart; any other mode does not', { skip: windows === true ? false : windows }, async (t) => {
   const env = { VW_MCP_SHARED_SESSION: '1' };
   const a = await startServer({ env, settings: { lockMode: 'never' } });
   await a.call('vault_unlock');
