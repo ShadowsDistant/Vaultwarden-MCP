@@ -77,12 +77,19 @@ function dpapiWorks() {
   if (process.platform !== 'win32') return false;
   const ps = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const script = path.join(ROOT, 'scripts', 'dpapi.ps1');
+  // The same pared-down environment the test servers get, and a deadline: a helper that takes
+  // longer than this would make every unlock in these tests wait on it.
+  const env = {};
+  for (const k of ['PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']) {
+    if (process.env[k]) env[k] = process.env[k];
+  }
   const run = (mode, input) =>
-    spawnSync(ps, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Mode', mode], { input, encoding: 'utf8', timeout: 30_000 });
+    spawnSync(ps, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Mode', mode], { input, env, encoding: 'utf8', timeout: 10_000 });
+  const t0 = Date.now();
   const p = run('protect', 'probe');
   if (p.status !== 0 || !p.stdout) return false;
   const u = run('unprotect', p.stdout);
-  return u.status === 0 && u.stdout === 'probe';
+  return u.status === 0 && u.stdout === 'probe' && Date.now() - t0 < 10_000;
 }
 
 const windows = dpapiWorks() || (process.platform === 'win32' ? 'DPAPI is not usable for this account' : 'DPAPI is Windows only');
