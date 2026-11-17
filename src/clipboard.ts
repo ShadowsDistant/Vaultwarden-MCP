@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG, parseCommand } from './config.js';
 import { log } from './log.js';
+import { runNodeScript } from './noderun.js';
 import { settings } from './settings.js';
 
 /**
@@ -37,12 +38,15 @@ function runHelper(args: string[], stdin?: string): Promise<HelperResult> {
   } else if (process.platform === 'win32') {
     cmd = CONFIG.powershell;
     argv = ['-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File', path.join(CONFIG.scriptsDir, 'clip.ps1'), ...args];
-  } else if (process.platform === 'darwin') {
-    cmd = process.execPath;
-    argv = [path.join(CONFIG.scriptsDir, 'clip-mac.mjs'), ...args];
   } else {
-    cmd = process.execPath;
-    argv = [path.join(CONFIG.scriptsDir, 'clip-linux.mjs'), ...args];
+    // A Node helper. Run through runNodeScript, which copes with hosts (Claude Desktop) whose
+    // own executable cannot be started as Node.
+    const script = path.join(CONFIG.scriptsDir, process.platform === 'darwin' ? 'clip-mac.mjs' : 'clip-linux.mjs');
+    return runNodeScript(script, { args, env: process.env, stdin, timeoutMs: 30_000 }).then((r) => ({
+      code: r.code ?? -1,
+      stdout: r.stdout,
+      stderr: r.error ?? r.stderr,
+    }));
   }
 
   return new Promise((resolve) => {

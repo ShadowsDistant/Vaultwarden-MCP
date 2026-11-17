@@ -1,8 +1,12 @@
-# Builds Vaultwarden MCP into a runtime tree outside OneDrive, and optionally registers it
-# with Claude Desktop.
+# Builds Bitwarden MCP from source into a runtime tree outside OneDrive, and optionally
+# registers it with an AI app. (Most people should install the .mcpb release instead.)
 #
 #   .\scripts\setup.ps1
-#   .\scripts\setup.ps1 -Install -Server https://vault.example.com -Email you@example.com
+#   .\scripts\setup.ps1 -Install                      Claude Desktop
+#   .\scripts\setup.ps1 -Install -Client cursor       Cursor; also windsurf
+#   .\scripts\setup.ps1 -Install -Server https://vault.example.com   pin the vault address
+#
+# Without -Server, you choose the vault when you sign in, in the Settings app.
 #
 # Two reasons the build does not happen in place. OneDrive tries to sync node_modules, which
 # is tens of thousands of files it has no business touching. And Claude Desktop is an MSIX
@@ -15,10 +19,9 @@
 [CmdletBinding()]
 param(
   [switch]$Install,
+  [ValidateSet('claude-desktop', 'cursor', 'windsurf')][string]$Client = 'claude-desktop',
   [string]$Server,
   [string]$Email,
-  [int]$IdleLockMinutes = -1,
-  [switch]$NoReveal,
   [switch]$AllowHttp,
   [switch]$Clean
 )
@@ -133,25 +136,27 @@ try {
 
 Write-Host ''
 Write-Host "Built: $(Join-Path $build 'dist\index.js')"
-$settingsExe = Join-Path $build 'dist\settings\Vaultwarden-MCP-Settings.exe'
+$settingsExe = Join-Path $build 'dist\settings\Bitwarden-MCP-Settings.exe'
 if (Test-Path $settingsExe) { Write-Host "Settings app: $settingsExe" }
 
 if ($Install) {
-  if (-not $Server) { throw "Pass -Server https://your-vault.example.com so the server knows which instance to use." }
   # Not $args: that is an automatic variable in PowerShell, and assigning to it corrupts the
   # splat so the next call binds the wrong parameters entirely.
-  $installArgs = @((Join-Path $build 'scripts\install.mjs'), '--server', $Server)
-  # Only when asked for. Writing a value here pins it into the config file, where it would go
-  # on overriding the server's own default long after that default has moved.
-  if ($IdleLockMinutes -ge 0) { $installArgs += @('--idle-lock', "$IdleLockMinutes") }
+  $installArgs = @((Join-Path $build 'scripts\install.mjs'), '--client', $Client)
+  if ($Server) { $installArgs += @('--server', $Server) }
   if ($Email) { $installArgs += @('--email', $Email) }
-  if ($NoReveal) { $installArgs += '--no-reveal' }
   if ($AllowHttp) { $installArgs += '--allow-http' }
-  $env:VW_MCP_HOME = $home_
   $code = Invoke-Native $node $installArgs
-  if ($code -ne 0) { throw "Registering with Claude Desktop failed." }
+  if ($code -ne 0) { throw "Registering with $Client failed." }
+  if (Test-Path $settingsExe) {
+    Write-Host ''
+    Write-Host 'Opening Bitwarden MCP Settings so you can sign in...'
+    Start-Process -FilePath $settingsExe -ArgumentList '--home', $home_, '--page', 'welcome'
+  }
 } else {
   Write-Host ''
-  Write-Host 'To register it with Claude Desktop:'
-  Write-Host "  .\scripts\setup.ps1 -Install -Server https://your-vault.example.com"
+  Write-Host 'To add it to Claude Desktop (or -Client cursor / windsurf):'
+  Write-Host '  .\scripts\setup.ps1 -Install'
+  Write-Host 'For any other app, print the config entry and paste it in:'
+  Write-Host "  & '$node' '$(Join-Path $build 'scripts\install.mjs')' --print"
 }

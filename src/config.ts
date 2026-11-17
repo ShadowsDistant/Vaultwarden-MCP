@@ -53,11 +53,14 @@ function flag(name: string): boolean {
  */
 const BW_ENV_DENY = /^(NODE_OPTIONS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|ELECTRON_RUN_AS_NODE|BW_SESSION|BITWARDENCLI_APPDATA_DIR|BW_NOINTERACTION|PATH|PATHEXT|COMSPEC)$/i;
 
+/** What the product is called wherever a person reads it. */
+export const PRODUCT = 'Bitwarden MCP';
+
 export const CONFIG = {
   home,
   bwDataDir,
   bwJs: findBwJs(),
-  /** Node used to run bw. Claude Desktop extensions run on its bundled Node; reuse it. */
+  /** Node used to run bw in process mode. Inside Claude Desktop there is none; see noderun.ts. */
   nodeExe: process.env.VW_MCP_NODE_PATH ?? process.execPath,
   configFile: path.join(home, 'config.json'),
   /** Behaviour and permissions, written by the Settings app. See settings.ts. */
@@ -104,45 +107,93 @@ export const CONFIG = {
   scriptsDir: [path.join(here, 'scripts'), path.resolve(here, '..', 'scripts')].find((p) => fs.existsSync(p)) ?? path.resolve(here, '..', 'scripts'),
   powershell: path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
   uiUri: 'ui://vaultwarden/card.html',
+  /** Shared, DPAPI-protected copy of the session key, so every server process shares one unlock. */
+  sessionFile: path.join(home, 'session.json'),
+  /** Touched on vault activity, so an idle lock in one process sees activity in another. */
+  activityFile: path.join(home, 'activity'),
+  /** A request from the server to the Settings app: which page to open. */
+  launchRequestFile: path.join(home, 'launch-request.json'),
+  /** Update check results, shared with the Settings app. */
+  updateFile: path.join(home, 'update.json'),
+  /** Where the server keeps a stable copy of the Settings app, so shortcuts survive updates. */
+  appDir: path.join(home, 'app'),
 };
 
 export type StoredConfig = {
-  /** Vault server URL, e.g. https://vault.example.com. Set at install time, never by the model. */
+  /**
+   * Vault server URL, e.g. https://vault.bitwarden.com. Set in the Settings app or at install
+   * time, never by the model.
+   */
   serverUrl?: string;
-  /** Account email, used to pre-fill the sign-in dialog. */
+  /** Account email, used to pre-fill sign-in. */
   email?: string;
 };
 
-let cached: StoredConfig | null = null;
+/** A byte-order mark, which an editor may prepend and which JSON.parse rejects. */
+const BOM = new RegExp('^' + String.fromCharCode(0xfeff));
 
-export function readConfig(): StoredConfig {
-  if (cached) return cached;
+let cached: StoredConfig | null = null;
+let cachedStamp = '';
+
+function configStamp(): string {
   try {
-    const raw = fs.readFileSync(CONFIG.configFile, 'utf8');
+    const st = fs.statSync(CONFIG.configFile);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return 'none';
+  }
+}
+
+/**
+ * The vault address and account, re-read whenever the file changes: the Settings app writes it
+ * while the server is running, during first-time setup.
+ */
+export function readConfig(): StoredConfig {
+  const stamp = configStamp();
+  if (cached && stamp === cachedStamp) return cached;
+  cachedStamp = stamp;
+  try {
+    const raw = fs.readFileSync(CONFIG.configFile, 'utf8').replace(BOM, '');
     const parsed = JSON.parse(raw) as StoredConfig;
     cached = {
-      serverUrl: typeof parsed.serverUrl === 'string' ? parsed.serverUrl : undefined,
-      email: typeof parsed.email === 'string' ? parsed.email : undefined,
+      serverUrl: typeof parsed.serverUrl === 'string' && parsed.serverUrl.trim() ? parsed.serverUrl.trim() : undefined,
+      email: typeof parsed.email === 'string' && parsed.email.trim() ? parsed.email.trim() : undefined,
     };
   } catch {
     cached = {};
   }
-  // Environment wins: it is how the .mcpb user_config and the config-file installer inject
-  // the instance, and neither the model nor vault content can reach it.
-  if (process.env.VW_MCP_SERVER_URL) cached.serverUrl = process.env.VW_MCP_SERVER_URL.trim();
-  if (process.env.VW_MCP_EMAIL) cached.email = process.env.VW_MCP_EMAIL.trim();
+  // Environment wins: it is how a hand-written MCP config pins the instance, and neither the
+  // model nor vault content can reach it.
+  if (process.env.VW_MCP_SERVER_URL?.trim()) cached.serverUrl = process.env.VW_MCP_SERVER_URL.trim();
+  if (process.env.VW_MCP_EMAIL?.trim()) cached.email = process.env.VW_MCP_EMAIL.trim();
   return cached;
 }
 
+/** True when the install's environment fixes the vault address, so it cannot be changed here. */
+export function serverUrlFixedByEnv(): boolean {
+  return Boolean(process.env.VW_MCP_SERVER_URL?.trim());
+}
+
+/** Writes config.json atomically, keeping keys this version does not know about. */
 export function writeConfig(next: StoredConfig): void {
-  const merged = { ...readConfig(), ...next };
-  cached = merged;
+  let existing: Record<string, unknown> = {};
+  try {
+    existing = JSON.parse(fs.readFileSync(CONFIG.configFile, 'utf8').replace(BOM, '')) as Record<string, unknown>;
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) existing = {};
+  } catch {
+    existing = {};
+  }
+  const merged: Record<string, unknown> = { ...existing };
+  for (const [k, v] of Object.entries(next)) if (v !== undefined) merged[k] = v;
   fs.mkdirSync(path.dirname(CONFIG.configFile), { recursive: true });
-  fs.writeFileSync(CONFIG.configFile, JSON.stringify(merged, null, 2) + '\n', 'utf8');
+  const tmp = `${CONFIG.configFile}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, CONFIG.configFile);
+  cached = null;
 }
 
 /**
- * A vault URL is only acceptable over TLS. Loopback is exempted because a Vaultwarden on
+ * A vault URL is only acceptable over TLS. Loopback is exempted because a server on
  * the same machine over plain http never crosses a network.
  */
 export function validateServerUrl(raw: string): { url: string } | { error: string } {

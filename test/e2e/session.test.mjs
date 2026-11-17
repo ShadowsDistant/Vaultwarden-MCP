@@ -229,14 +229,18 @@ test('the server reports what it is and what it is for', async (t) => {
   t.after(() => s.close());
 
   const info = s.client.getServerVersion();
+  // The id stays put so existing installs and configs keep working; the name people see does not.
   assert.equal(info.name, 'vaultwarden');
+  assert.equal(info.title, 'Bitwarden');
   assert.match(info.version, /^\d+\.\d+\.\d+/);
 
   const instructions = s.client.getInstructions();
   assert.match(instructions, /untrusted content/i);
-  assert.match(instructions, /never ask the user to type a master password into the chat/i);
+  assert.match(instructions, /never ask the user to type a master password/i);
   assert.match(instructions, /never change anything on their own/i);
   assert.match(instructions, /vault_copy_secret/);
+  assert.match(instructions, /Update available/);
+  assert.doesNotMatch(instructions, /Claude/, 'the server works with any assistant, so it does not name one');
 });
 
 test('the card may reach exactly one origin, and it is the vault itself', async (t) => {

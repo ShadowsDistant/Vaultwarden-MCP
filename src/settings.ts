@@ -8,7 +8,7 @@ import { log } from './log.js';
  * Behaviour and permissions, as the user set them.
  *
  * These live in `settings.json` beside the vault data, written by the Settings app, and are
- * re-read whenever the file changes, so a change applies to Claude's next request without a
+ * re-read whenever the file changes, so a change applies to the assistant's next request without a
  * restart. The one exception is whether cards are shown at all: that decides how the tools are
  * registered with the host, which only happens when the server starts.
  *
@@ -19,21 +19,41 @@ import { log } from './log.js';
 
 export type AccessMode = 'never' | 'ask' | 'session';
 
+/**
+ * When the vault locks by itself.
+ *  - idle: after `idleLockMinutes` with no vault activity in any server process.
+ *  - exit: when the AI app stops the extension (and on an explicit lock).
+ *  - never: stays unlocked across restarts. On Windows the session key is kept, encrypted for
+ *    this Windows user only, so the next start picks it up. Only an explicit lock ends it.
+ */
+export type LockMode = 'idle' | 'exit' | 'never';
+
 export type Settings = {
   /** Show inline cards in chats. Read once at startup. */
   cards: boolean;
-  /** Let Claude prepare new logins, edits and deletions. Every one still needs a human yes. */
+  /** Let the assistant prepare new logins and edits. Every one still needs a human yes. */
   allowChanges: boolean;
-  /** What happens when Claude asks for a secret from a site that is not trusted. */
+  /** Let the assistant prepare moving items to the trash. Needs allowChanges as well. */
+  allowTrash: boolean;
+  /** What happens when the assistant asks for a secret from a site that is not trusted. */
   access: AccessMode;
-  /** Sites whose password and one-time code Claude may read or copy without asking. */
+  /** Sites whose password and one-time code the assistant may read or copy without asking. */
   trustedSites: string[];
-  /** Lock after this many idle minutes. 0 means only when the app closes. */
+  lockMode: LockMode;
+  /** Minutes of inactivity before an idle lock. Used only when lockMode is idle. */
   idleLockMinutes: number;
   /** How long a revealed secret stays on screen in the card. */
   revealSeconds: number;
   /** How long a copied secret stays on the clipboard. */
   clipboardClearSeconds: number;
+  /** Ask GitHub, now and then, whether a newer release exists. Sends nothing about the user. */
+  updateCheck: boolean;
+  /**
+   * Motion in the cards and the Settings app. "system" follows the operating system's
+   * reduce-motion setting; "on" shows it regardless, for people who switched Windows
+   * animations off for other reasons and still want them here.
+   */
+  animations: 'on' | 'off' | 'system';
 };
 
 export type SettingsState = {
@@ -50,11 +70,15 @@ export type SettingsState = {
 export const DEFAULTS: Settings = {
   cards: true,
   allowChanges: true,
+  allowTrash: true,
   access: 'ask',
   trustedSites: [],
-  idleLockMinutes: 0,
+  lockMode: 'exit',
+  idleLockMinutes: 15,
   revealSeconds: 30,
   clipboardClearSeconds: 30,
+  updateCheck: true,
+  animations: 'on',
 };
 
 /**
@@ -63,10 +87,13 @@ export const DEFAULTS: Settings = {
  * file must never leave the server looser than the user configured it, and the only way to
  * guarantee that without knowing what they configured is to assume the strictest choice.
  */
-const LOCKDOWN: Pick<Settings, 'access' | 'trustedSites' | 'allowChanges'> = {
+const LOCKDOWN: Pick<Settings, 'access' | 'trustedSites' | 'allowChanges' | 'allowTrash' | 'lockMode'> = {
   access: 'never',
   trustedSites: [],
   allowChanges: false,
+  allowTrash: false,
+  // "never" is the one lock setting that loosens anything, so a broken file cannot keep it.
+  lockMode: 'exit',
 };
 
 // ---------------------------------------------------------------------------
@@ -120,6 +147,16 @@ export function normaliseSite(entry: string): { host: string } | { reason: strin
     return { reason: `"${host}" is shared by many unrelated sites, so it cannot be trusted as a whole` };
   }
   return { host };
+}
+
+/** Minutes before an idle lock, or 0 when this lock mode has none. */
+export function idleMinutes(s: Settings): number {
+  return s.lockMode === 'idle' ? s.idleLockMinutes : 0;
+}
+
+/** Whether trashing is allowed: both switches must be on. */
+export function trashAllowed(s: Settings): boolean {
+  return s.allowChanges && s.allowTrash;
 }
 
 /** True when `host` is the entry itself or one of its subdomains. IPs match exactly only. */
@@ -180,6 +217,11 @@ function accessFrom(raw: unknown): AccessMode | undefined {
   return undefined;
 }
 
+function lockModeFrom(raw: unknown): LockMode | undefined {
+  const v = String(raw ?? '').trim().toLowerCase();
+  return v === 'idle' || v === 'exit' || v === 'never' ? v : undefined;
+}
+
 function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, Math.round(n)));
 }
@@ -206,7 +248,14 @@ function fromEnv(): Settings {
   const access = accessFrom(process.env.VW_MCP_MODEL_REVEAL);
   if (access) s.access = access;
   const idle = envNum('VW_MCP_IDLE_LOCK_MIN');
-  if (idle !== undefined) s.idleLockMinutes = bound(idle, 0, 1440);
+  if (idle !== undefined) {
+    if (idle > 0) {
+      s.lockMode = 'idle';
+      s.idleLockMinutes = bound(idle, 0.01, 1440);
+    } else s.lockMode = 'exit';
+  }
+  const updates = envBool('VW_MCP_UPDATE_CHECK');
+  if (updates !== undefined) s.updateCheck = updates;
   const reveal = envNum('VW_MCP_REVEAL_SECONDS');
   if (reveal !== undefined) s.revealSeconds = bound(reveal, 1, 300);
   const clip = envNum('VW_MCP_CLIPBOARD_CLEAR_SECONDS');
@@ -242,9 +291,19 @@ function readState(): SettingsState {
     };
     take('cards', (v) => (typeof v === 'boolean' ? v : undefined));
     take('allowChanges', (v) => (typeof v === 'boolean' ? v : undefined));
+    take('allowTrash', (v) => (typeof v === 'boolean' ? v : undefined));
+    take('updateCheck', (v) => (typeof v === 'boolean' ? v : undefined));
+    take('animations', (v) => (v === 'on' || v === 'off' || v === 'system' ? v : undefined));
     take('access', (v) => accessFrom(v));
     take('trustedSites', (v) => (Array.isArray(v) ? v.map((x) => String(x)) : undefined));
     take('idleLockMinutes', (v) => (typeof v === 'number' && Number.isFinite(v) ? clamp(v, 0, 1440) : undefined));
+    if ('lockMode' in file) take('lockMode', (v) => lockModeFrom(v));
+    else if ('idleLockMinutes' in file) {
+      // Written before lock modes existed: a positive number meant an idle lock, zero meant
+      // "only when the app closes".
+      s.lockMode = s.idleLockMinutes > 0 ? 'idle' : 'exit';
+    }
+    if (s.lockMode === 'idle' && s.idleLockMinutes <= 0) s.idleLockMinutes = DEFAULTS.idleLockMinutes;
     take('revealSeconds', (v) => (typeof v === 'number' && Number.isFinite(v) ? clamp(v, 5, 300) : undefined));
     take('clipboardClearSeconds', (v) => (typeof v === 'number' && Number.isFinite(v) ? clamp(v, 5, 300) : undefined));
   }
@@ -279,7 +338,7 @@ function fileStamp(): string {
 }
 
 function summarise(s: Settings): string {
-  return `access=${s.access} trusted=${s.trustedSites.length} changes=${s.allowChanges} cards=${s.cards} idle=${s.idleLockMinutes}`;
+  return `access=${s.access} trusted=${s.trustedSites.length} changes=${s.allowChanges} trash=${s.allowTrash} cards=${s.cards} lock=${s.lockMode}${s.lockMode === 'idle' ? `:${s.idleLockMinutes}m` : ''} updates=${s.updateCheck}`;
 }
 
 const listeners: ((s: SettingsState) => void)[] = [];
@@ -291,7 +350,7 @@ export function onSettingsChange(listener: (s: SettingsState) => void): void {
 
 /**
  * The settings in force right now. A stat per call is cheap, and it means the Settings app's
- * Save takes effect on Claude's very next request rather than whenever a watcher fires.
+ * Save takes effect on the very next request rather than whenever a watcher fires.
  */
 export function current(): SettingsState {
   const now = fileStamp();
@@ -335,6 +394,13 @@ export type ServerStatus = {
   warnings: string[];
   /** The settings in force, so the app can start from them when there is no file yet. */
   effective: Settings;
+  /** How this copy was installed: decides how the Settings app offers an update. */
+  install?: 'claude-desktop' | 'other';
+  /** The vault as this process last saw it. No secrets: a state, an email, an address. */
+  vault?: { state: string; email?: string; serverUrl?: string; lastSync?: string };
+  /** The Settings app's way in: a named pipe and the token it must present. */
+  ipc?: { pipe: string; token: string };
+  update?: { current: string; latest: string; url: string; checkedAt: string } | null;
 };
 
 /**

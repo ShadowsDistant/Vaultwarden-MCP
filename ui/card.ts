@@ -35,7 +35,7 @@ type StatusInfo = {
   lastSync?: string;
   autoLockMinutes?: number;
   locksInSeconds?: number;
-  permissions?: { secrets?: string; trustedSites?: number; changes?: string; problem?: string };
+  permissions?: { secrets?: string; trustedSites?: number; changes?: string; trash?: string; lock?: string; problem?: string };
 };
 
 type Payload = {
@@ -73,6 +73,12 @@ type Payload = {
   saved?: boolean;
   error?: string;
   hint?: string;
+  /** A newer release exists. Only a checked version number and the release page. */
+  update?: { current: string; latest: string; url?: string };
+  /** The server opened the Settings app for the user to sign in. */
+  openedSettings?: boolean;
+  /** The user's animation choice from the Settings app. */
+  motion?: 'on' | 'off' | 'system';
 };
 
 const app = new App({ name: 'vaultwarden-card', version: '0.1.0' }, {}, { autoResize: false });
@@ -165,8 +171,8 @@ function webUrl(raw: string | undefined): string | undefined {
   }
 }
 
-async function openSettings(): Promise<void> {
-  const r = await call('vault_ui_open_settings');
+async function openSettings(page?: string): Promise<void> {
+  const r = await call('vault_ui_open_settings', page ? { page } : {});
   if (r.error) showError(String(r.hint ?? r.error));
 }
 
@@ -202,26 +208,28 @@ function iconButton(kind: keyof typeof ICONS, label: string, onClick: () => void
   return b;
 }
 
-/** A small indeterminate ring, sized like the icon it replaces. */
+/**
+ * A small indeterminate spinner, sized like the icon it replaces: a round-capped arc that grows
+ * and shrinks as it turns, over a faint track. The motion is in card.html.
+ */
 function spinner(): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('fill', 'none');
+  svg.setAttribute('role', 'progressbar');
   svg.setAttribute('aria-label', 'Working');
   svg.classList.add('spin');
-  const track = document.createElementNS(SVG_NS, 'circle');
-  track.setAttribute('cx', '12');
-  track.setAttribute('cy', '12');
-  track.setAttribute('r', '8.5');
-  track.setAttribute('stroke', 'currentColor');
-  track.setAttribute('stroke-width', '2.2');
-  track.setAttribute('opacity', '0.25');
-  const arc = document.createElementNS(SVG_NS, 'path');
-  arc.setAttribute('d', 'M12 3.5a8.5 8.5 0 0 1 8.5 8.5');
-  arc.setAttribute('stroke', 'currentColor');
-  arc.setAttribute('stroke-width', '2.2');
-  arc.setAttribute('stroke-linecap', 'round');
-  svg.append(track, arc);
+  const ring = (cls: string): SVGCircleElement => {
+    const c = document.createElementNS(SVG_NS, 'circle');
+    c.setAttribute('cx', '12');
+    c.setAttribute('cy', '12');
+    c.setAttribute('r', '9');
+    c.setAttribute('stroke', 'currentColor');
+    c.setAttribute('stroke-width', '2.4');
+    c.setAttribute('class', cls);
+    return c;
+  };
+  svg.append(ring('spin-track'), ring('spin-arc'));
   return svg;
 }
 
@@ -245,10 +253,12 @@ function button(
     const done = onClick();
     if (!done || typeof (done as Promise<unknown>).finally !== 'function') return;
     b.setAttribute('disabled', 'true');
+    b.classList.add('is-busy');
     paint(busyLabel ?? label, spinner());
     void (done as Promise<unknown>).finally(() => {
       if (!b.isConnected) return;
       b.removeAttribute('disabled');
+      b.classList.remove('is-busy');
       paint(label, iconKind ? icon(ICONS[iconKind]) : undefined);
     });
   });
@@ -342,9 +352,11 @@ let chain: Promise<unknown> = Promise.resolve();
 
 /** Set only by the standalone preview server; inside a host this stays false. */
 let demoMode = false;
+/** Preview only: calls never finish, so a screenshot can show the busy state. */
+let demoHang = false;
 
 function call(name: string, args: Record<string, unknown> = {}): Promise<Payload & Record<string, unknown>> {
-  if (demoMode) return Promise.resolve(demoCall(name, args));
+  if (demoMode) return demoHang ? new Promise(() => undefined) : Promise.resolve(demoCall(name, args));
   const runIt = async (): Promise<Payload & Record<string, unknown>> => {
     busy++;
     card.classList.add('busy');
@@ -554,6 +566,8 @@ function renderStatus(p: Payload): Node {
     const bits = [`Passwords: ${perms.secrets ?? 'ask every time'}`];
     if (perms.trustedSites) bits.push(`${perms.trustedSites} trusted site${perms.trustedSites === 1 ? '' : 's'}`);
     if (perms.changes && perms.changes.startsWith('switched off')) bits.push('changes off');
+    else if (perms.trash && perms.trash.startsWith('switched off')) bits.push('trash off');
+    if (perms.lock && perms.lock.startsWith('never')) bits.push('never locks');
     const line = el('div', 'banner');
     line.append(icon(ICONS.shield));
     line.append(document.createTextNode(bits.join(' · ')));
@@ -561,34 +575,39 @@ function renderStatus(p: Payload): Node {
   }
   if (perms?.problem) out.append(el('div', 'note warn', perms.problem));
 
+  if (p.openedSettings) {
+    out.append(el('div', 'banner', 'Bitwarden MCP Settings is open on your desktop. Sign in there, then ask again here.'));
+  }
+
   if (p.error === 'cancelled') {
     out.append(el('div', 'note', 'The password window was dismissed. Nothing was changed.'));
   } else if (p.error === 'bad_password') {
     out.append(el('div', 'note warn', 'That master password was not accepted. Try again.'));
   }
 
-  if (st.state === 'unconfigured') {
+  if (st.state === 'unconfigured' && !p.canOpenSettings) {
     out.append(
       el(
         'div',
         'note',
-        'The vault address is set when the server is installed, not from chat. See the README for the one-line setting, then restart Claude.',
+        'No vault is set up. The address is set in the extension configuration (VW_MCP_SERVER_URL), not from chat. See the README.',
       ),
     );
   }
 
   const actions = el('div', 'actions');
-  if (st.state === 'unauthenticated' || st.state === 'locked') {
+  const viaSettings = p.canOpenSettings && (st.state === 'unauthenticated' || st.state === 'unconfigured');
+  if (st.state === 'unauthenticated' || st.state === 'locked' || viaSettings) {
     actions.append(
       button(
-        st.state === 'locked' ? 'Unlock' : 'Sign in',
+        st.state === 'locked' ? 'Unlock' : st.state === 'unconfigured' ? 'Set up' : 'Sign in',
         'primary',
         () => act('vault_ui_unlock'),
         'unlock',
-        'Waiting for the window',
+        viaSettings ? 'Opening settings' : 'Waiting for the window',
       ),
     );
-    const hintLine = el('span', 'head-sub', 'Opens a window on your desktop');
+    const hintLine = el('span', 'head-sub', viaSettings ? 'Opens Bitwarden MCP Settings' : 'Opens a window on your desktop');
     hintLine.style.alignSelf = 'center';
     actions.append(hintLine);
   } else if (st.state === 'unlocked') {
@@ -597,7 +616,7 @@ function renderStatus(p: Payload): Node {
     actions.append(button('Sync', 'ghost', () => act('vault_ui_sync'), 'sync', 'Syncing'));
   }
   if (p.canOpenSettings) {
-    const gear = iconButton('sliders', 'Vaultwarden MCP Settings', () => openSettings());
+    const gear = iconButton('sliders', 'Bitwarden MCP Settings', () => openSettings());
     gear.style.marginLeft = 'auto';
     actions.append(gear);
   }
@@ -741,7 +760,7 @@ function renderItem(p: Payload): Node {
 
   const actions = el('div', 'actions');
   if (it.inTrash) {
-    actions.append(el('span', 'head-sub', 'Ask Claude to restore this item.'));
+    actions.append(el('span', 'head-sub', 'Ask your assistant to restore this item.'));
   } else {
     actions.append(button('Back to results', 'ghost', () => backToList(), 'back', 'Loading'));
   }
@@ -947,7 +966,7 @@ function renderDraft(p: Payload): Node {
     form.append(wrap);
   }
 
-  // Notes Claude drafted are shown and editable. Saving a field the person never saw would let
+  // Notes the assistant drafted are shown and editable. Saving a field the person never saw would let
   // anything at all ride into their vault.
   const notesWrap = el('div', 'form-field');
   notesWrap.append(el('div', 'form-label', 'Notes'));
@@ -1147,7 +1166,7 @@ function renderGenerator(p: Payload): Node {
 
   const banner = el('div', 'banner');
   banner.append(icon(ICONS.info));
-  banner.append(document.createTextNode('This password is shown only here. Claude cannot read it.'));
+  banner.append(document.createTextNode('This password is shown only here. Your assistant cannot read it.'));
   out.append(banner);
   return out;
 }
@@ -1306,9 +1325,34 @@ function render(p: Payload): void {
         node = p.status ? renderStatus(p) : renderError(String(p.error ?? 'Nothing to show.'), p.hint);
     }
   }
-  body.replaceChildren(node);
+  if (p.update) knownUpdate = p.update;
+  if (p.motion) document.documentElement.dataset.motion = p.motion;
+  if (typeof p.canOpenSettings === 'boolean') settingsAvailable = p.canOpenSettings;
+  const top = knownUpdate ? updateBanner(knownUpdate) : null;
+  if (top) body.replaceChildren(top, node);
+  else body.replaceChildren(node);
   body.classList.add('fade-in');
   notifySize();
+}
+
+let knownUpdate: Payload['update'] | null = null;
+let settingsAvailable = false;
+
+/**
+ * Shown above every view once the server says a newer release exists, so nobody misses a
+ * security fix just because they only ever use the card.
+ */
+function updateBanner(u: NonNullable<Payload['update']>): HTMLElement {
+  const bar = el('div', 'update-bar');
+  bar.append(icon(ICONS.sync));
+  bar.append(el('span', 'update-text', `Bitwarden MCP ${u.latest} is available. You have ${u.current}.`));
+  const release = webUrl(u.url);
+  if (settingsAvailable) {
+    bar.append(button('Update', 'small', () => openSettings('updates')));
+  } else if (release) {
+    bar.append(button('See release', 'small', () => app.openLink({ url: release }).catch(() => showError('This host would not open the link.'))));
+  }
+  return bar;
 }
 
 // ---------------------------------------------------------------------------
@@ -1407,7 +1451,18 @@ void (async () => {
       document.body.style.padding = '20px';
       card.style.maxWidth = '460px';
     }
-    render(demoPayload(demo));
+    const payload = demoPayload(demo);
+    // ?update shows the banner a newer release puts on every view; ?motion sets the user's
+    // animation choice the way the server would pass it.
+    if (params.has('update')) payload.update = { current: '0.4.0', latest: '0.4.1', url: 'https://github.com/ShadowsDistant/Vaultwarden-MCP/releases' };
+    const motion = params.get('motion');
+    if (motion === 'on' || motion === 'off' || motion === 'system') payload.motion = motion;
+    render(payload);
+    if (params.has('busy')) {
+      demoHang = true;
+      const b = card.querySelector('.btn.primary') as HTMLButtonElement | null;
+      b?.click();
+    }
     return;
   }
   try {
@@ -1541,7 +1596,9 @@ function demoPayload(kind: string): Payload {
     case 'locked':
       return { view: 'status', status: { state: 'locked', server: 'bitwarden.pikapod.net', email: 'shado@example.com' }, canPrompt: true, canOpenSettings: true };
     case 'unconfigured':
-      return { view: 'status', status: { state: 'unconfigured' } };
+      return { view: 'status', status: { state: 'unconfigured' }, canOpenSettings: true };
+    case 'signin':
+      return { view: 'status', status: { state: 'unauthenticated', server: 'vault.bitwarden.com' }, canPrompt: true, canOpenSettings: true };
     default:
       return {
         iconBase: 'https://bitwarden.pikapod.net',

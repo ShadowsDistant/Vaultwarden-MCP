@@ -4,6 +4,7 @@
 // directly.
 
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -161,6 +162,12 @@ export async function startServer({ env = {}, seed = true, seedState = {}, cards
     VW_MCP_SERVER_URL: 'https://vault.example.com',
     VW_MCP_EMAIL: 'shado@example.com',
     VW_MCP_LOG_FILE: path.join(home, 'server.log'),
+    // No real Settings app, no first-run window, no network, no shared DPAPI session: each test
+    // turns on what it is about.
+    VW_MCP_SETTINGS_EXE: '',
+    VW_MCP_NO_AUTOLAUNCH: '1',
+    VW_MCP_UPDATE_CHECK: '0',
+    VW_MCP_SHARED_SESSION: '0',
     FAKE_CLIP_FILE: clipFile,
     FAKE_PROMPT_LOG: promptLog,
     FAKE_PROMPT_PASSWORD: MASTER_PASSWORD,
@@ -252,6 +259,27 @@ export async function startServer({ env = {}, seed = true, seedState = {}, cards
         ? await client.callTool({ name: 'vault_ui_generated', arguments: { id: structured.generatedId } })
         : await client.callTool({ name: 'vault_ui_draft_secret', arguments: { draft_id: structured.draftId } });
       return JSON.parse(r.content[0].text).secret;
+    },
+    /** One request to the Settings app channel, exactly as the app makes it. */
+    async ipc(request, { token } = {}) {
+      const st = JSON.parse(fs.readFileSync(path.join(home, 'status.json'), 'utf8'));
+      if (!st.ipc) throw new Error('no ipc in status.json');
+      const address = process.platform === 'win32' ? `\\\\.\\pipe\\${st.ipc.pipe}` : st.ipc.pipe;
+      return new Promise((resolve, reject) => {
+        const sock = net.connect(address);
+        let buf = '';
+        sock.setEncoding('utf8');
+        sock.on('data', (d) => (buf += d));
+        sock.on('error', reject);
+        sock.on('close', () => {
+          try {
+            resolve(JSON.parse(buf.trim()));
+          } catch (e) {
+            reject(new Error('bad reply: ' + buf));
+          }
+        });
+        sock.write(JSON.stringify({ token: token ?? st.ipc.token, ...request }) + '\n');
+      });
     },
     async call(name, args = {}) {
       return client.callTool({ name, arguments: args });

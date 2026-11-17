@@ -1,6 +1,6 @@
 <title>Vault</title>
 <style>
-  /* Host-provided variables win; the fallbacks approximate Claude's own palette so the card
+  /* Host-provided variables win; the fallbacks approximate a typical host palette so the card
      still looks right in a host that sends none. The third layer handles a host that sets a
      theme but no variables. */
   :root {
@@ -200,14 +200,42 @@
   .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
   .btn.ghost:hover { background: var(--bg2); color: var(--fg); }
   .btn[disabled] { opacity: .62; pointer-events: none; }
+  /* The button that is doing the work stays at full strength, so its spinner reads clearly;
+     only the rest of the card steps back. */
+  .btn.is-busy { opacity: 1; cursor: progress; }
+  .btn.is-busy svg.spin { width: 15px; height: 15px; }
   .btn svg { width: 14px; height: 14px; }
 
   /* ---- working state ----
      Every button here ends in a call to the Bitwarden CLI, which spawns a process and can
      take several seconds. Nothing below is decoration: without it the card looks identical
      before and after a click, which is indistinguishable from a button that does nothing. */
-  .spin { animation: spin .8s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin-turn 1.1s linear infinite; transform-origin: 50% 50%; }
+  .spin .spin-track { opacity: .18; }
+  .spin .spin-arc {
+    stroke-linecap: round; stroke-dasharray: 1 57; stroke-dashoffset: 0;
+    transform: rotate(-90deg); transform-origin: 50% 50%;
+    animation: spin-dash 1.4s cubic-bezier(.4, 0, .2, 1) infinite;
+  }
+  @keyframes spin-turn { to { transform: rotate(360deg); } }
+  @keyframes spin-dash {
+    0%   { stroke-dasharray: 1 57;  stroke-dashoffset: 0; }
+    50%  { stroke-dasharray: 34 57; stroke-dashoffset: -10; }
+    100% { stroke-dasharray: 34 57; stroke-dashoffset: -56; }
+  }
+
+  /* ---- update banner ---- */
+  .update-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px 8px 14px; font-size: 12px; line-height: 1.4;
+    background: var(--accent-soft); color: var(--fg);
+    border-bottom: 1px solid var(--accent-line);
+    animation: slide-down .22s cubic-bezier(.2, .8, .2, 1) both;
+  }
+  .update-bar > svg { width: 14px; height: 14px; flex: none; color: var(--accent); }
+  .update-bar .update-text { flex: 1; min-width: 0; }
+  .btn.small { padding: 4px 10px; font-size: 12px; min-height: 0; }
+  @keyframes slide-down { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 
   .icon-btn.working { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
   .icon-btn.working svg { width: 15px; height: 15px; }
@@ -221,9 +249,10 @@
   .card.busy { cursor: progress; }
 
   @media (prefers-reduced-motion: reduce) {
-    /* The spinner is the only signal that a slow call is running, so it keeps turning — just
-       slowly enough not to be the thing anyone notices. */
-    .spin { animation-duration: 2.4s !important; }
+    /* The spinner is the only signal that a slow call is running, so it is essential motion
+       and keeps its full animation: a slowed-down ring read as stuck. */
+    .spin { animation-duration: 1.1s !important; animation-iteration-count: infinite !important; }
+    .spin .spin-arc { animation-duration: 1.4s !important; animation-iteration-count: infinite !important; }
   }
 
   .actions { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line2); }
@@ -342,9 +371,18 @@
   .fade-in { animation: fade .18s ease both; }
   @keyframes fade { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
 
+  /* Motion is declared unconditionally above and suppressed here, in one place. The user's
+     choice in the Settings app arrives as data-motion: "on" keeps it even when the operating
+     system asks for reduced motion, "off" removes it everywhere. The spinner is exempt from
+     both: it is the only sign that a slow call is still running. */
   @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    :root:not([data-motion="on"]) *:not(.spin):not(.spin-arc),
+    :root:not([data-motion="on"]) *::before,
+    :root:not([data-motion="on"]) *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
   }
+  :root[data-motion="off"] *:not(.spin):not(.spin-arc),
+  :root[data-motion="off"] *::before,
+  :root[data-motion="off"] *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 
   @media (max-width: 420px) {
     .field-label, .diff-label { width: 62px; }

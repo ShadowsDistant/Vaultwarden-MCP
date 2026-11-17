@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.4.0 — 2026-11-17
+
+### Fixed: the extension couldn't reach the vault inside Claude Desktop
+
+Claude Desktop runs extensions inside its own app, which can't be started as Node, so every call
+to the Bitwarden CLI failed within milliseconds. The CLI now runs in a worker thread when there's
+no Node to start it with. Other apps keep running it as a child process.
+
+### It's called Bitwarden MCP now
+
+It's mostly used with Bitwarden (bitwarden.com, bitwarden.eu, self-hosted), and Vaultwarden works
+too. The extension shows up as **Bitwarden**, and nothing in it assumes a particular AI app. The
+extension id hasn't changed, so 0.3.0 updates in place.
+
+### Set up in the Settings app
+
+Installing the extension asks for nothing. The first time it starts, **Bitwarden MCP Settings**
+opens and walks you through it: where your vault is, signing in, and what the assistant may do. It
+can also add desktop and Start menu shortcuts.
+
+Sign-in supports two-step login by authenticator app, emailed code or YubiKey, and personal API
+keys, which are the way through for accounts the Bitwarden CLI can't otherwise sign in (new-device
+codes, passkey, Duo or FIDO2 as the only second step). On macOS and Linux the sign-in window asks
+for the vault address.
+
+### A rebuilt Settings app
+
+New pages: Account, Permissions, Locking and timers, General, Updates, Activity and About. It has
+animations, which you can switch off or set to follow Windows. Dark mode no longer shows black
+text.
+
+New settings:
+- **Lock never**: stays unlocked, even after a restart, until you lock it yourself.
+- **A separate switch for moving items to the trash.**
+- **Theme and animations.**
+- **Update checks.**
+
+### One unlock for every chat (Windows)
+
+Unlocking in one chat no longer locks the others. The session is shared between the server's
+processes, encrypted for your Windows account. Locking anywhere locks everywhere.
+
+### Updates
+
+The server and the Settings app check GitHub for new releases. When one is out, you hear about it
+three ways: a banner on the vault card, a note from the assistant in chat, and a banner in the
+Settings app. The Settings app downloads the update, verifies its checksum, and hands it to
+Claude Desktop to install.
+
+### Also
+
+- A clearer progress spinner on the card. The button that's working stays at full strength.
+- A mistyped password while re-confirming an item no longer locks a vault that was open.
+- `scripts/install.mjs` can add the server to Cursor and Windsurf, or print the entry for any
+  other app. `--server` is now optional.
+- CI runs the test suite on Windows too.
+
+
 ## 0.3.0 — 2026-11-17
 
 ### A Settings app

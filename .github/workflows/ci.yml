@@ -53,6 +53,23 @@ jobs:
           path: out/*.mcpb
           if-no-files-found: error
 
+  # The same suite on Windows, where the paths most people actually run live: the shared unlock
+  # (DPAPI), "never lock" across a restart, and signing in through the Settings app.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install
+        run: npm ci --legacy-peer-deps
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
+
   # The Settings app compiles with the C# compiler built into Windows. It is built twice: once
   # with the newest compiler on the runner, and once with the .NET Framework's own C# 5
   # compiler, which is the one setup.ps1 falls back to on a machine without Visual Studio.
@@ -72,5 +89,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: settings-app
-          path: out/settings/Vaultwarden-MCP-Settings.exe
+          path: out/settings/Bitwarden-MCP-Settings.exe
           if-no-files-found: error

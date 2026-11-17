@@ -152,12 +152,34 @@ switch (cmd) {
 
   case 'login': {
     if (state.status !== 'unauthenticated') errOut('You are already logged in.');
+    if (flags.has('--apikey')) {
+      // A personal API key signs in without unlocking; the vault still needs the password.
+      const id = process.env.BW_CLIENTID ?? '';
+      const secret = process.env.BW_CLIENTSECRET ?? '';
+      if (!/^user.[0-9a-f-]{36}$/.test(id) || secret !== (process.env.FAKE_BW_CLIENT_SECRET ?? 'api-secret')) {
+        errOut('client_id or client_secret is incorrect. Try again.');
+      }
+      Object.assign(state, { status: 'locked', userEmail: 'apikey@example.com', userId: 'a'.repeat(32), session: null, lastSync: new Date().toISOString() });
+      save(state);
+      okOut({ object: 'message', title: 'You are logged in!', message: '', raw: '' });
+    }
     const email = positional[1];
     const envName = opt('--passwordenv');
     const password = envName ? process.env[envName] : undefined;
     if (!password) errOut('Master password is required. Try again in interactive mode or provide a password file or environment variable.');
     if (password !== PASSWORD) errOut('Username or password is incorrect. Try again.');
-    if (process.env.FAKE_BW_REQUIRE_2FA && !opt('--code')) errOut('Code is required. Two-step login is enabled on this account.');
+    if (process.env.FAKE_BW_REQUIRE_2FA) {
+      const code = opt('--code');
+      if (!code) {
+        // The real CLI emails a code when the chosen method is email, then still says this.
+        if (opt('--method') === '1') {
+          state.emailedCodes = (state.emailedCodes ?? 0) + 1;
+          save(state);
+        }
+        errOut('Code is required.');
+      }
+      if (code !== (process.env.FAKE_BW_2FA_CODE ?? '123456')) errOut('Two-step token is invalid. Try again.');
+    }
     state.status = 'locked';
     state.userEmail = email;
     state.userId = createHash('sha256').update(String(email)).digest('hex').slice(0, 32);

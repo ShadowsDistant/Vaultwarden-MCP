@@ -1,9 +1,9 @@
 {
   "name": "vaultwarden-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "MCP server for a self-hosted Vaultwarden vault, driven through the official Bitwarden CLI. Secrets never reach the model.",
+  "description": "MCP server for a Bitwarden or self-hosted Vaultwarden vault, driven through the official Bitwarden CLI. Secrets never reach the model.",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-ui.mjs",

@@ -41,7 +41,7 @@ if (fs.existsSync(assets)) {
 // with the compiled output rather than only existing in the source tree.
 const distScripts = path.join(root, 'dist', 'scripts');
 fs.mkdirSync(distScripts, { recursive: true });
-for (const f of ['secure-prompt.ps1', 'secure-prompt-mac.mjs', 'secure-prompt-linux.mjs', 'clip.ps1', 'clip-mac.mjs', 'clip-linux.mjs']) {
+for (const f of ['secure-prompt.ps1', 'secure-prompt-mac.mjs', 'secure-prompt-linux.mjs', 'clip.ps1', 'clip-mac.mjs', 'clip-linux.mjs', 'dpapi.ps1']) {
   const from = path.join(root, 'scripts', f);
   if (fs.existsSync(from)) fs.copyFileSync(from, path.join(distScripts, f));
 }

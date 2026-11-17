@@ -427,7 +427,7 @@ export async function editItem(id: string, patch: ItemPatch): Promise<BwItem> {
 }
 
 /**
- * Sends an item to the trash, where Vaultwarden keeps it for 30 days. There is no permanent
+ * Sends an item to the trash, where the server keeps it for 30 days. There is no permanent
  * delete in this server: an irreversible action taken on a model's say-so has no acceptable
  * failure mode, and the web vault is two clicks away for the rare time it is wanted.
  */

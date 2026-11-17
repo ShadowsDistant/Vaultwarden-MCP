@@ -1,4 +1,4 @@
-// Builds the .mcpb bundle Claude Desktop installs as an extension.
+// Builds the .mcpb bundle that Claude Desktop (and other MCPB hosts) install as an extension.
 //
 //   node scripts/pack-mcpb.mjs
 //
@@ -41,9 +41,11 @@ fs.cpSync(dist, path.join(stage, 'dist'), { recursive: true });
 // The Windows Settings app is built separately (scripts/build-settings.ps1, Windows only) into
 // dist/settings, and travels in the bundle when it is there. A bundle built without it still
 // works everywhere; settings.json is then edited by hand.
-const settingsExe = path.join(dist, 'settings', 'Vaultwarden-MCP-Settings.exe');
+const settingsExe = path.join(dist, 'settings', 'Bitwarden-MCP-Settings.exe');
 if (fs.existsSync(settingsExe)) console.error('including the Settings app');
-else console.error('warning: dist/settings/Vaultwarden-MCP-Settings.exe is missing; packing without the Settings app');
+else console.error('warning: dist/settings/Bitwarden-MCP-Settings.exe is missing; packing without the Settings app');
+// An older build's exe must not ride along under its old name.
+fs.rmSync(path.join(stage, 'dist', 'settings', 'Vaultwarden-MCP-Settings.exe'), { force: true });
 fs.copyFileSync(path.join(root, 'package.json'), path.join(stage, 'package.json'));
 for (const f of ['README.md', 'LICENSE', 'SECURITY.md']) {
   if (fs.existsSync(path.join(root, f))) fs.copyFileSync(path.join(root, f), path.join(stage, f));
@@ -87,24 +89,26 @@ execFileSync(process.execPath, [npmCli, 'install', '--omit=dev', '--legacy-peer-
 
 const manifest = {
   manifest_version: '0.3',
+  // The id stays "vaultwarden" so an installed copy updates in place; the name people see is
+  // Bitwarden, which is what it is mostly used with.
   name: 'vaultwarden',
-  display_name: 'Vaultwarden',
+  display_name: 'Bitwarden',
   version: pkg.version,
-  description: 'Read and write a self-hosted Vaultwarden vault. Secrets stay out of the conversation.',
+  description: 'Use your Bitwarden or self-hosted Vaultwarden vault from your AI assistant. Secrets stay out of the conversation.',
   long_description:
-    'Connects Claude to a self-hosted Vaultwarden (or Bitwarden) vault through the official Bitwarden CLI. ' +
-    'Claude can search the vault, look items up, copy a password to your clipboard, prepare new logins and stage ' +
-    'edits. Passwords, one-time codes and notes stay out of the conversation unless you allow it, per request or ' +
-    'for sites you trust. Signing in and unlocking happen in a window on your desktop, so your master password ' +
-    'never enters the conversation. Nothing is written to the vault until you confirm it, and deletes only ever ' +
-    'move an item to the trash. On Windows, the Vaultwarden MCP Settings app sets what Claude may do.',
+    'Connects your AI assistant to your Bitwarden vault (bitwarden.com, bitwarden.eu or a self-hosted Vaultwarden) ' +
+    'through the official Bitwarden CLI. It can search the vault, look items up, copy a password to your clipboard, ' +
+    'prepare new logins and stage edits. Passwords, one-time codes and notes stay out of the conversation unless you ' +
+    'allow it, per request or for sites you trust. You sign in in the Bitwarden MCP Settings app (Windows) or a ' +
+    'desktop window, so your master password never enters the conversation. Nothing is written to the vault until ' +
+    'you confirm it, and deletes only ever move an item to the trash. Unofficial; not affiliated with Bitwarden, Inc.',
   author: { name: 'ShadowsDistant', url: 'https://github.com/ShadowsDistant' },
   homepage: 'https://github.com/ShadowsDistant/Vaultwarden-MCP',
   documentation: 'https://github.com/ShadowsDistant/Vaultwarden-MCP#readme',
   support: 'https://github.com/ShadowsDistant/Vaultwarden-MCP/issues',
   repository: { type: 'git', url: 'https://github.com/ShadowsDistant/Vaultwarden-MCP' },
   license: 'GPL-3.0-or-later',
-  keywords: ['vaultwarden', 'bitwarden', 'password manager', 'passwords', 'vault', 'security'],
+  keywords: ['bitwarden', 'vaultwarden', 'password manager', 'passwords', 'vault', 'security'],
   icon: 'icon.png',
   server: {
     type: 'node',
@@ -112,45 +116,28 @@ const manifest = {
     mcp_config: {
       command: 'node',
       args: ['${__dirname}/dist/index.js'],
-      env: {
-        VW_MCP_SERVER_URL: '${user_config.server_url}',
-        VW_MCP_EMAIL: '${user_config.email}',
-      },
     },
   },
-  user_config: {
-    server_url: {
-      type: 'string',
-      title: 'Vault address',
-      description: 'Your Vaultwarden instance, for example https://vault.example.com. Set here rather than in chat, so nothing in a conversation can point the vault somewhere else.',
-      required: true,
-    },
-    email: {
-      type: 'string',
-      title: 'Account email',
-      description: 'Used to pre-fill the sign-in window. Optional.',
-      required: false,
-    },
-    // Everything else (what Claude may read, trusted sites, cards, auto-lock) lives in the
-    // Settings app and settings.json, where it can change without reinstalling the extension.
-  },
+  // Nothing to fill in at install. The vault address, account and every permission are set in
+  // the Settings app (or, without it, the sign-in window), where they can change without
+  // reinstalling and where no conversation can reach them.
   tools: [
     { name: 'vault_status', description: 'Show whether the vault is signed in, locked or unlocked' },
-    { name: 'vault_login', description: 'Sign in, in a window on your desktop' },
+    { name: 'vault_login', description: 'Sign in, in the Settings app or a window on your desktop' },
     { name: 'vault_unlock', description: 'Unlock, in a window on your desktop' },
     { name: 'vault_lock', description: 'Lock the vault immediately' },
     { name: 'vault_sync', description: 'Pull the latest vault contents' },
     { name: 'vault_search', description: 'Find items by name, site or folder' },
     { name: 'vault_get_item', description: 'Show one item, without its secrets' },
     { name: 'vault_list_folders', description: 'List the vault folders' },
-    { name: 'vault_copy_secret', description: 'Copy a password to your clipboard without Claude seeing it' },
+    { name: 'vault_copy_secret', description: 'Copy a password to your clipboard without the assistant seeing it' },
     { name: 'vault_reveal_secret', description: 'Read one secret into the conversation, if your settings allow it' },
-    { name: 'vault_generate_password', description: 'Generate a password or passphrase Claude never sees' },
+    { name: 'vault_generate_password', description: 'Generate a password or passphrase the assistant never sees' },
     { name: 'vault_create_login', description: 'Prepare a new login for you to save' },
     { name: 'vault_edit_item', description: 'Prepare a change for you to confirm' },
     { name: 'vault_trash_item', description: 'Prepare to move an item to the trash' },
     { name: 'vault_restore_item', description: 'Bring an item back out of the trash' },
-    { name: 'vault_open_settings', description: 'Open the Settings app on your desktop' },
+    { name: 'vault_open_settings', description: 'Open Bitwarden MCP Settings on your desktop' },
   ],
   tools_generated: false,
   compatibility: {

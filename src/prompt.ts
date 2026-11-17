@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG, parseCommand } from './config.js';
 import { log } from './log.js';
+import { runNodeScript } from './noderun.js';
 
 /**
  * Native dialogs, owned by the server process.
@@ -66,7 +67,9 @@ export function dialogsAvailable(): boolean {
   return process.platform === 'win32' || process.platform === 'darwin' || process.platform === 'linux';
 }
 
-function commandFor(): { cmd: string; args: string[] } | null {
+type Target = { cmd: string; args: string[] } | { script: string };
+
+function commandFor(): Target | null {
   if (CONFIG.promptCmd) return parseCommand(CONFIG.promptCmd);
   const script = (name: string) => path.join(CONFIG.scriptsDir, name);
   if (process.platform === 'win32') {
@@ -82,11 +85,26 @@ function commandFor(): { cmd: string; args: string[] } | null {
   if (process.platform === 'darwin') {
     const js = script('secure-prompt-mac.mjs');
     if (!fs.existsSync(js)) return null;
-    return { cmd: process.execPath, args: [js] };
+    return { script: js };
   }
   const js = script('secure-prompt-linux.mjs');
   if (!fs.existsSync(js)) return null;
-  return { cmd: process.execPath, args: [js] };
+  return { script: js };
+}
+
+function parseAnswer(out: string, err: string): PromptResult {
+  const trimmed = out.trim();
+  if (!trimmed) {
+    if (err.trim()) log.warn('dialog exited with no answer', { stderr: err.trim().slice(0, 200) });
+    return { ok: false, reason: 'cancelled' };
+  }
+  try {
+    const parsed = JSON.parse(trimmed.slice(trimmed.search(/[[{]/))) as { ok?: boolean; values?: Record<string, string> };
+    return parsed.ok ? { ok: true, values: parsed.values ?? {} } : { ok: false, reason: 'cancelled' };
+  } catch {
+    log.warn('dialog produced unparseable output');
+    return { ok: false, reason: 'cancelled' };
+  }
 }
 
 /**
@@ -113,13 +131,27 @@ export async function prompt(spec: PromptSpec): Promise<PromptResult> {
     throw new PromptError(
       'no_dialog',
       'No native dialog is available on this system.',
-      'Unlock the vault outside Claude and start the server with BW_SESSION set.',
+      'Unlock the vault outside the AI app and start the server with BW_SESSION set.',
     );
   }
 
   open = true;
   recent.push(now);
   try {
+    if ('script' in target) {
+      const r = await runNodeScript(target.script, {
+        args: [],
+        env: { ...process.env, VW_PROMPT: '1' },
+        stdin: JSON.stringify(spec),
+        timeoutMs: DIALOG_TIMEOUT_MS,
+      });
+      if (r.timedOut) return { ok: false, reason: 'timeout' };
+      if (r.error) {
+        log.error('dialog failed to start', { error: r.error });
+        return { ok: false, reason: 'unavailable' };
+      }
+      return parseAnswer(r.stdout, r.stderr);
+    }
     return await new Promise<PromptResult>((resolve) => {
       const child = spawn(target.cmd, target.args, {
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -150,22 +182,7 @@ export async function prompt(spec: PromptSpec): Promise<PromptResult> {
         log.error('dialog failed to start', e);
         done({ ok: false, reason: 'unavailable' });
       });
-      child.on('close', () => {
-        const trimmed = out.trim();
-        if (!trimmed) {
-          if (err.trim()) log.warn('dialog exited with no answer', { stderr: err.trim().slice(0, 200) });
-          done({ ok: false, reason: 'cancelled' });
-          return;
-        }
-        try {
-          const parsed = JSON.parse(trimmed.slice(trimmed.search(/[[{]/))) as { ok?: boolean; values?: Record<string, string> };
-          if (parsed.ok) done({ ok: true, values: parsed.values ?? {} });
-          else done({ ok: false, reason: 'cancelled' });
-        } catch {
-          log.warn('dialog produced unparseable output');
-          done({ ok: false, reason: 'cancelled' });
-        }
-      });
+      child.on('close', () => done(parseAnswer(out, err)));
 
       child.stdin.write(JSON.stringify(spec));
       child.stdin.end();

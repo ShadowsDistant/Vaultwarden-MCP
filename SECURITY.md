@@ -12,8 +12,8 @@ what an attacker asks still cannot leak a secret or destroy anything.
 
 | | |
 | --- | --- |
-| **Trusted** | The person at the keyboard, answering a window drawn by this server. |
-| **Trusted** | The install-time configuration (the vault address), and `settings.json`, written by the Settings app. |
+| **Trusted** | The person at the keyboard, answering a window drawn by this server or using the Settings app. |
+| **Trusted** | `config.json` (the vault address) and `settings.json`, written by the Settings app, and an MCP config's `env`. |
 | **Not trusted** | The model. |
 | **Not trusted** | Everything in the vault: item names, usernames, URLs, notes, folder names. Any of it can be set by whoever shared or imported an item. |
 | **Not trusted** | Any other MCP server or app connected to the same client. |
@@ -69,10 +69,10 @@ on a yes.
 
 Everything that would be saved is shown before it is saved, including notes the model drafted:
 a field the person never sees is a field the model could fill with anything. When an edit would
-move a login onto a trusted site, the confirmation says that Claude will then be able to read its
+move a login onto a trusted site, the confirmation says that the assistant will then be able to read its
 password without asking.
 
-With *Let Claude prepare changes* switched off, every write tool refuses, and so does the card's
+With *Let the assistant prepare changes* switched off, every write tool refuses, and so does the card's
 confirm for anything staged before the switch.
 
 Staged actions are single-use and expire after ten minutes, so a card sitting in an old transcript
@@ -86,10 +86,17 @@ the web vault is two clicks away for the rare time it is genuinely wanted.
 
 ### 3. The master password never crosses the wire
 
-Signing in and unlocking open a real OS window drawn by this server: a WPF dialog on Windows,
-`osascript` on macOS, `zenity` or `kdialog` on Linux. What you type goes down a pipe into the
-server process and straight into the environment of one `bw` child. It is never in an MCP message,
-so it is never in the transcript, the model's context, or a host log.
+On Windows you sign in in the Settings app. It sends the password, and any two-step code or API
+key, over a local named pipe to the running server, which puts it straight into the environment of
+one `bw` call. Unlocking, and signing in elsewhere, use a real OS window drawn by this server: a WPF
+dialog on Windows, `osascript` on macOS, `zenity` or `kdialog` on Linux, whose answer comes back
+down a pipe the same way. None of it is ever in an MCP message, so it is never in the transcript,
+the model's context, or a host log.
+
+The pipe has a random name and answers only requests carrying a random 256-bit token. Both are in
+`status.json` in your own profile, which is exactly the set of people who could already drive the
+vault. A browser cannot open a named pipe, the model has no tool that touches it, sign-in attempts
+over it are capped at ten in five minutes, and no reply ever contains a password.
 
 Consequences worth stating plainly:
 
@@ -98,9 +105,19 @@ Consequences worth stating plainly:
 - The window names the account and the instance, so you can tell what you are unlocking.
 - Windows are single-flight and capped at ten in ten minutes, so a model looping on requests
   cannot keep a window in front of you until one is clicked out of fatigue.
-- The session key lives in memory only. It is dropped on lock, when the process ends — which is
-  when Claude Desktop closes — and after the idle time in the Settings app if you set one. It is
-  never written to disk, so it cannot outlive the process whatever happens.
+- The session key lives in memory, and on Windows in one shared file (below). It is dropped on
+  lock, when the AI app closes the extension, and after the idle time if you chose one.
+
+**One unlock for every process (Windows).** An AI app can run several copies of this server, and
+each `bw unlock` retires the previous key, so unlocking in one chat used to lock the others. The key
+is therefore shared through `session.json`, encrypted with Windows DPAPI for your Windows account
+only. It is deleted on any lock. A copy left behind by a process that crashed is discarded unless
+you chose *Never lock*, so closing the app still means locked.
+
+**Never lock** is the one setting that keeps the vault open across restarts: the shared key is kept
+until you lock explicitly. Anyone who can use your Windows account can then use the vault without
+the master password, which is the same trade Bitwarden's own "Never" vault timeout makes. A settings
+file that will not parse can never keep it in force.
 
 ### 4. The vault address cannot be reached from a conversation
 
@@ -109,13 +126,15 @@ one that is easy to miss: a model that could repoint the CLI at an attacker's ho
 for a sign-in, and you would type your master password into a window that looks exactly right. The
 attacker would get the server-auth hash and could replay it against your real vault.
 
-So the address is set at install time — extension settings, `scripts/install.mjs`, or
-`VW_MCP_SERVER_URL` — and nothing in a conversation can change it. Plain http is refused unless the
-host is loopback or you pass `--allow-http` yourself.
+So the address is chosen by you, in the Settings app or the sign-in window, or pinned with
+`VW_MCP_SERVER_URL`, and nothing in a conversation can change it. A signed-in account is never moved
+to another server: you sign out first, on purpose. When `VW_MCP_SERVER_URL` is set, not even the
+Settings app can change it. Plain http is refused unless the host is loopback or you allow it
+yourself.
 
 ### 5. The model cannot change its own permissions
 
-What Claude may do lives in `~/.vaultwarden-mcp/settings.json`, written by the Settings app. No
+What the assistant may do lives in `~/.vaultwarden-mcp/settings.json`, written by the Settings app. No
 tool writes that file, no tool takes a setting as an argument, and a test fails if any tool grows
 a parameter that looks like one. `vault_open_settings` opens the app on the desktop and nothing
 more; the change is made by a person, in a window the model cannot see into.
@@ -158,7 +177,7 @@ there in the host's history. Trust only sites whose password you would be comfor
 transcript. Copying (`vault_copy_secret`) is the better habit even for trusted sites, because the
 value never enters the conversation at all.
 
-An item shared into your vault by someone else could list a trusted site. Claude would then be
+An item shared into your vault by someone else could list a trusted site. The assistant would then be
 able to read that item's password without asking, but that password belongs to the person who
 shared it and is already known to them; nothing of yours is exposed by it.
 
@@ -201,15 +220,25 @@ hijacking it for.
   CLI on an unusual self-hosted setup, and names such as `NODE_OPTIONS`, `PATH` and `BW_SESSION`
   are dropped from it.
 - **Nothing secret is logged.** Items appear in the log by id, never by name — the log is a
-  plaintext file that outlives the session, and Claude Desktop keeps a copy of the server's stderr.
+  plaintext file that outlives the session, and the host may keep a copy of the server's stderr.
 - **Clipboard copies are tagged** with the formats that exclude them from Windows clipboard history
   and cloud clipboard, and cleared after 30 seconds — but only if the clipboard still holds the
   value, so anything you copied in the meantime survives.
 
+## Updates
+
+The server and the Settings app ask GitHub's public releases API for the latest version, at most
+every six hours, and only while update checks are on. The only thing that reaches the model is a
+version number that matched a strict `major.minor.patch` pattern, so a release title or description
+can never become text in a conversation. The Settings app downloads only assets under this
+repository's release download path, verifies them against the release's `SHA256SUMS.txt`, and hands
+the `.mcpb` to Claude Desktop, which asks you to confirm the install. That protects against a
+corrupted download, not against a compromised repository.
+
 ## What this does not protect against
 
 - **Anything running as you on your machine.** A process with your user account can read this
-  server's memory, the CLI's `data.json`, and a child's environment, and it can rewrite
+  server's memory, the CLI's `data.json`, a child's environment and the DPAPI-protected shared session, and it can rewrite
   `settings.json`. That is also the Bitwarden desktop client's threat model. File permissions only
   keep out *other* users.
 - **The Settings app is not code-signed.** Download it only from this repository's releases, and

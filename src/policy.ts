@@ -2,14 +2,14 @@ import { itemOnTrustedSite, onSettingsChange, type Settings } from './settings.j
 import { onLock } from './session.js';
 
 /**
- * When Claude may have a secret.
+ * When the assistant may have a secret.
  *
- * This governs only what Claude asks for. A person clicking Reveal or Copy in a card is not
+ * This governs only what the assistant asks for. A person clicking Reveal or Copy in a card is not
  * subject to any of it; that is the owner of the vault looking at their own vault.
  *
  * The order of the checks is the policy:
  *
- *  1. An item the user marked "master password re-prompt" is never released to Claude at all.
+ *  1. An item the user marked "master password re-prompt" is never released to the assistant at all.
  *     That flag is the user's own instruction about that item, and no setting overrides it.
  *  2. A password or one-time code for a trusted site is released without asking. Notes are
  *     not: they are where recovery codes and the like end up, and they are not tied to a site.
@@ -32,7 +32,7 @@ export function decide(item: ItemLike, field: SecretField, s: Settings, approved
     return {
       kind: 'deny',
       code: 'reprompt',
-      message: 'This item is marked "master password re-prompt", so it is never released to Claude.',
+      message: 'This item is marked "master password re-prompt", so it is never released to your AI assistant.',
       hint: 'The user can reveal or copy it in the card after re-entering their master password.',
     };
   }
@@ -43,8 +43,8 @@ export function decide(item: ItemLike, field: SecretField, s: Settings, approved
     return {
       kind: 'deny',
       code: 'never',
-      message: 'Claude is not allowed to read or copy secrets on this install.',
-      hint: 'The user can change this in the Vaultwarden MCP Settings app, or reveal and copy values in the card themselves.',
+      message: 'The assistant is not allowed to read or copy secrets on this install.',
+      hint: 'The user can change this in the Bitwarden MCP Settings app, or reveal and copy values in the card themselves.',
     };
   }
   if (s.access === 'session' && approved(approvalKey(item.id, field))) {

@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import { CONFIG } from './config.js';
 import { log } from './log.js';
+import { runMode, runNodeScript } from './noderun.js';
 
 /**
  * The Bitwarden CLI, wrapped.
@@ -39,6 +39,12 @@ export class BwError extends Error {
     super(message);
     this.name = 'BwError';
   }
+
+  /**
+   * What the CLI actually said, for callers that must tell similar failures apart (a missing
+   * two-step code from a wrong one). Never logged and never sent to the model.
+   */
+  raw?: string;
 }
 
 export type BwResult<T = unknown> = { success: boolean; data?: T; message?: string };
@@ -104,6 +110,12 @@ function childEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
 }
 
 function classify(text: string, exitCode: number | null): BwError {
+  const e = classifyText(text, exitCode);
+  e.raw = text.trim().slice(0, 500);
+  return e;
+}
+
+function classifyText(text: string, exitCode: number | null): BwError {
   const t = text.toLowerCase();
   if (/you are not logged in|not logged in/.test(t)) {
     return new BwError('not_logged_in', 'Not signed in to the vault.', 'Use vault_login.');
@@ -162,43 +174,28 @@ function firstJson(text: string): unknown | undefined {
 }
 
 /** Runs bw once. Callers must already hold the lock (use `bw()` unless composing). */
-function runOnce(args: string[], opts: RunOptions = {}): Promise<{ stdout: string; stderr: string; code: number | null }> {
+async function runOnce(args: string[], opts: RunOptions = {}): Promise<{ stdout: string; stderr: string; code: number | null }> {
   if (!CONFIG.bwJs) {
-    return Promise.reject(new BwError('no_cli', 'The Bitwarden CLI is not installed.', 'Reinstall the server, or set VW_MCP_BW_PATH to a bw executable.'));
+    throw new BwError('no_cli', 'The Bitwarden CLI is not installed.', 'Reinstall the server, or set VW_MCP_BW_PATH to a bw executable.');
   }
-  const argv = [CONFIG.bwJs, ...args, '--nointeraction'];
+  const argv = [...args, '--nointeraction'];
   // Exactly one output mode. `--raw` gives the bare value with no trailing newline, which is
   // what a password read needs; `--response` gives the JSON envelope for everything else.
   if (opts.raw) argv.push('--raw');
   else if (opts.response) argv.push('--response');
-  return new Promise((resolve, reject) => {
-    const child = execFile(
-      CONFIG.nodeExe,
-      argv,
-      {
-        env: childEnv(opts.env),
-        timeout: opts.timeoutMs ?? 60_000,
-        maxBuffer: 16 * 1024 * 1024,
-        windowsHide: true,
-        shell: false,
-        encoding: 'utf8',
-      },
-      (err, stdout, stderr) => {
-        const killed = (err as NodeJS.ErrnoException & { killed?: boolean })?.killed;
-        const code = (err as NodeJS.ErrnoException & { code?: number })?.code ?? 0;
-        if (killed) {
-          reject(new BwError('timeout', 'The Bitwarden CLI did not respond in time.'));
-          return;
-        }
-        resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code: typeof code === 'number' ? code : err ? 1 : 0 });
-      },
-    );
-    if (child.stdin) {
-      if (opts.stdin !== undefined) child.stdin.write(opts.stdin);
-      // readStdin() in the CLI waits for `end`; without this the process hangs forever.
-      child.stdin.end();
-    }
+  const r = await runNodeScript(CONFIG.bwJs, {
+    args: argv,
+    env: childEnv(opts.env),
+    stdin: opts.stdin,
+    timeoutMs: opts.timeoutMs ?? 60_000,
+    nodeExe: CONFIG.nodeExe,
   });
+  if (r.timedOut) throw new BwError('timeout', 'The Bitwarden CLI did not respond in time.');
+  if (r.error) {
+    log.error('the Bitwarden CLI could not be started', { mode: runMode(CONFIG.nodeExe), error: r.error });
+    throw new BwError('no_cli', 'The Bitwarden CLI could not be started.', 'See the server log for the reason.');
+  }
+  return { stdout: r.stdout, stderr: r.stderr, code: r.code };
 }
 
 /**
