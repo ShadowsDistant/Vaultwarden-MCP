@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 — 2026-11-17
+
+The 0.4.1 download was packaged with the 0.4.0 Settings app, so its new Activity page and sign-in
+fixes were missing. 0.4.2 is the same release, packaged correctly. Install it over 0.4.1.
+
 ## 0.4.1 — 2026-11-17
 
 ### Fixed: unlocking said "Cryptography error"
