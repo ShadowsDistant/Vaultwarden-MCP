@@ -164,7 +164,7 @@ your AI app starts the extension.
 | **Locking and timers** | Lock when your AI app closes (default), after a period of inactivity, or never. How long a revealed password stays on screen, and when a copied one leaves the clipboard. |
 | **General** | Inline cards on or off, theme, animations. |
 | **Updates** | Check for and install new versions. |
-| **Activity** | What happened with your vault recently: unlocks, copies, changes. |
+| **Activity** | Everything your AI assistant did with your vault, and when: searches, items it looked at, passwords and codes it read or copied (and whether you allowed it), changes it prepared and the ones you confirmed, sign-in and locking. Names the app, item and site, never usernames, passwords or codes. Filter, search, clear, or switch it off. Stored in `activity.jsonl` on this computer only. |
 | **About** | Versions, shortcuts, the data folder. |
 
 **Never lock** keeps the vault unlocked even after a restart, until you lock it yourself. The

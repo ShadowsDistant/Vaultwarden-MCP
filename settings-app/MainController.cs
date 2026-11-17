@@ -233,18 +233,23 @@ namespace BitwardenMcpSettings
         {
             if (busy.ContainsKey(b)) return;
             busy[b] = b.Content;
-            StackPanel sp = new StackPanel();
-            sp.Orientation = Orientation.Horizontal;
-            sp.Children.Add(Motion.Spinner(14, b.Foreground));
+            // The button keeps its width so nothing around it jumps, says what it is doing, and
+            // the thin bar along the top of the window shows that something is happening.
+            if (!double.IsNaN(b.ActualWidth) && b.ActualWidth > 0) b.MinWidth = Math.Max(b.MinWidth, b.ActualWidth);
             TextBlock t = new TextBlock();
-            t.Text = label;
-            t.Margin = new Thickness(8, 0, 0, 0);
+            t.Text = label + Ch.Ellipsis;
             t.VerticalAlignment = VerticalAlignment.Center;
             t.Foreground = b.Foreground;
-            sp.Children.Add(t);
-            b.Content = sp;
+            b.Content = t;
+            b.Opacity = 0.8;
             b.IsHitTestVisible = false;
             b.Focusable = false;
+            PaintBusy();
+        }
+
+        void PaintBusy()
+        {
+            Motion.Busy(Find<Border>("BusyTrack"), Find<Border>("BusySegment"), busy.Count > 0);
         }
 
         void ClearBusy(Button b)
@@ -253,8 +258,10 @@ namespace BitwardenMcpSettings
             if (!busy.TryGetValue(b, out c)) return;
             busy.Remove(b);
             b.Content = c;
+            b.Opacity = 1;
             b.IsHitTestVisible = true;
             b.Focusable = true;
+            PaintBusy();
         }
 
         bool IsBusy(Button b) { return busy.ContainsKey(b); }
@@ -330,7 +337,7 @@ namespace BitwardenMcpSettings
             RoutedEventHandler changed = delegate { Changed(); };
             foreach (string n in new[] { "AccessAsk", "AccessSession", "AccessNever" }) Find<RadioButton>(n).Checked += changed;
             foreach (string n in new[] { "LockIdle", "LockExit", "LockNever" }) Find<RadioButton>(n).Checked += changed;
-            foreach (string n in new[] { "Cards", "AllowChanges", "AllowTrash", "UpdateCheck" })
+            foreach (string n in new[] { "Cards", "AllowChanges", "AllowTrash", "UpdateCheck", "ActivityLogSwitch" })
             {
                 Find<CheckBox>(n).Checked += changed;
                 Find<CheckBox>(n).Unchecked += changed;
@@ -398,6 +405,10 @@ namespace BitwardenMcpSettings
             Find<Button>("SignInBtn").Click += delegate { SignIn(-1, false); };
             Find<Button>("SaveLocBtn").Click += delegate { SaveLocationOnly(); };
             Find<Button>("UnlockBtn").Click += delegate { Unlock(); };
+            Find<Button>("ResignLink").Click += delegate
+            {
+                Ask("Sign in again?", "This signs this computer out of your vault and takes you to the sign-in form, where you enter your email, master password and two-step code. Use it if you changed your master password or two-step login since you last signed in here.", "Sign out", false, null, delegate(int r) { if (r == 1) SignOut(); });
+            };
             Find<Button>("LockBtn").Click += delegate { LockVault(Find<Button>("LockBtn")); };
             Find<Button>("LockNowBtn2").Click += delegate { LockVault(Find<Button>("LockNowBtn2")); };
             Find<Button>("SignOutBtn").Click += delegate
@@ -421,6 +432,18 @@ namespace BitwardenMcpSettings
             Find<Button>("NotesBtn").Click += delegate { Open(update != null && Updater.TrustedPage(update.Url) ? update.Url : Updater.ReleasesPage); };
             Find<Button>("UpdateBannerBtn").Click += delegate { Navigate("updates", true); };
             Find<Button>("RefreshActivity").Click += delegate { LoadActivity(); };
+            foreach (string n in new[] { "ActAll", "ActSecrets", "ActChanges", "ActAccount" }) Find<RadioButton>(n).Checked += delegate { if (!painting) RenderActivity(); };
+            Find<TextBox>("ActivitySearch").TextChanged += delegate { RenderActivity(); };
+            Find<Button>("ClearActivity").Click += delegate
+            {
+                Ask("Clear activity history?", "Everything on this page is deleted from this computer. This can't be undone.", "Clear", true, null, delegate(int r)
+                {
+                    if (r != 1) return;
+                    try { History.Clear(store); }
+                    catch (Exception e) { ShowMsg(Find<TextBlock>("ActivityMsg"), "Couldn't clear it. " + e.Message, "Danger"); return; }
+                    LoadActivity();
+                });
+            };
 
             // ---- welcome ----
             Find<Button>("SkipWelcome").Click += delegate { SkipWelcome(); };
@@ -576,6 +599,7 @@ namespace BitwardenMcpSettings
             model.AllowChanges = Find<CheckBox>("AllowChanges").IsChecked == true;
             model.AllowTrash = Find<CheckBox>("AllowTrash").IsChecked == true;
             model.UpdateCheck = Find<CheckBox>("UpdateCheck").IsChecked == true;
+            model.ActivityLog = Find<CheckBox>("ActivityLogSwitch").IsChecked == true;
             model.LockMode = Find<RadioButton>("LockIdle").IsChecked == true ? "idle" : Find<RadioButton>("LockNever").IsChecked == true ? "never" : "exit";
             model.IdleLockMinutes = PillValue("IdlePills", model.IdleLockMinutes);
             model.RevealSeconds = PillValue("RevealPills", model.RevealSeconds);
@@ -609,6 +633,7 @@ namespace BitwardenMcpSettings
                 Find<CheckBox>("AllowChanges").IsChecked = model.AllowChanges;
                 Find<CheckBox>("AllowTrash").IsChecked = model.AllowTrash;
                 Find<CheckBox>("UpdateCheck").IsChecked = model.UpdateCheck;
+                Find<CheckBox>("ActivityLogSwitch").IsChecked = model.ActivityLog;
                 Find<RadioButton>(model.LockMode == "idle" ? "LockIdle" : model.LockMode == "never" ? "LockNever" : "LockExit").IsChecked = true;
                 SelectPill("IdlePills", "idle", model.IdleLockMinutes, MinutesLabel);
                 SelectPill("RevealPills", "reveal", model.RevealSeconds, SecondsLabel);
@@ -849,6 +874,12 @@ namespace BitwardenMcpSettings
             pollTick++;
             RefreshStatus(pollTick % 3 == 0);
             if ((page == "account" || inWelcome) && pollTick % 3 == 0) RefreshVault();
+            // The Activity page follows the history as it is written, so it can stay open beside a chat.
+            if (page == "activity")
+            {
+                string hs = Store.Stamp(store.ActivityFile);
+                if (hs != historyStamp) { historyStamp = hs; LoadActivity(); }
+            }
             if (!Dirty() && loadError == null && store.Stamp() != loadedStamp) Reload();
         }
 
@@ -874,14 +905,13 @@ namespace BitwardenMcpSettings
         void PaintStatus()
         {
             TextBlock title = Find<TextBlock>("ServerTitle"), sub = Find<TextBlock>("ServerSub");
-            System.Windows.Shapes.Ellipse dot = Find<System.Windows.Shapes.Ellipse>("ServerDot");
-            System.Windows.Shapes.Ellipse halo = Find<System.Windows.Shapes.Ellipse>("ServerHalo");
+            TextBlock icon = Find<TextBlock>("ServerIcon");
             if (status == null)
             {
                 title.Text = "Not set up yet";
                 sub.Text = "Turn on the Bitwarden extension in your AI app.";
-                dot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "Faint");
-                Motion.Pulse(halo, false);
+                icon.Text = ((char)0xE839).ToString();
+                icon.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
             }
             else if (status.Running)
             {
@@ -890,15 +920,15 @@ namespace BitwardenMcpSettings
                 sub.Text = status.CanTalk
                     ? (string.IsNullOrEmpty(host) ? "Version " + status.Version : host)
                     : "Version " + status.Version + ". Update it to sign in from here.";
-                dot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "Success");
-                Motion.Pulse(halo, true);
+                icon.Text = ((char)0xE73E).ToString();
+                icon.SetResourceReference(TextBlock.ForegroundProperty, "Success");
             }
             else
             {
                 title.Text = "Extension not running";
                 sub.Text = status.UpdatedAt.HasValue ? "Last seen " + Ago(status.UpdatedAt.Value) + ". Open your AI app to start it." : "Open your AI app to start it.";
-                dot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "Faint");
-                Motion.Pulse(halo, false);
+                icon.Text = ((char)0xE839).ToString();
+                icon.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
             }
 
             Border banner = Find<Border>("Banner");
@@ -1062,29 +1092,16 @@ namespace BitwardenMcpSettings
 
             Border chip = Find<Border>("AcctChip");
             TextBlock chipText = Find<TextBlock>("AcctChipText");
-            System.Windows.Shapes.Ellipse dot = Find<System.Windows.Shapes.Ellipse>("AcctDot");
-            string label, fill, bg;
-            if (!talk) { label = "Offline"; fill = "Faint"; bg = "Surface3"; }
-            else if (state == "unlocked") { label = "Unlocked"; fill = "Success"; bg = "SuccessSoft"; }
-            else if (state == "locked") { label = "Locked"; fill = "Warn"; bg = "WarnSoft"; }
-            else { label = "Signed out"; fill = "Faint"; bg = "Surface3"; }
+            string label, bg;
+            if (!talk) { label = "Offline"; bg = "Surface3"; }
+            else if (state == "unlocked") { label = "Unlocked"; bg = "SuccessSoft"; }
+            else if (state == "locked") { label = "Locked"; bg = "WarnSoft"; }
+            else { label = "Signed out"; bg = "Surface3"; }
             chipText.Text = label;
-            dot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, fill);
             chip.SetResourceReference(Border.BackgroundProperty, bg);
 
             TextBlock avatar = Find<TextBlock>("AvatarText");
-            if (signedIn && !string.IsNullOrEmpty(email) && char.IsLetterOrDigit(email[0]))
-            {
-                avatar.FontFamily = new FontFamily("Segoe UI Variable Display, Segoe UI");
-                avatar.FontWeight = FontWeights.SemiBold;
-                avatar.Text = char.ToUpperInvariant(email[0]).ToString();
-            }
-            else
-            {
-                avatar.FontFamily = (FontFamily)Window.FindResource("Icons");
-                avatar.FontWeight = FontWeights.Normal;
-                avatar.Text = ((char)0xE77B).ToString();
-            }
+            avatar.Text = ((char)(state == "unlocked" ? 0xE785 : state == "locked" ? 0xE72E : 0xE77B)).ToString();
 
             bool showUnlock = talk && state == "locked";
             Grid unlockRow = Find<Grid>("UnlockRow");
@@ -1271,8 +1288,9 @@ namespace BitwardenMcpSettings
                         Motion.Slide(Find<Border>("TwoStepPanel"), true, -8);
                     }
                     if (method == 1) Find<RadioButton>("MethodEmail").IsChecked = true;
+                    else if (method < 0) Find<RadioButton>("MethodApp").IsChecked = true;
                     PaintMethod();
-                    text = !string.IsNullOrEmpty(message) ? message : method == 1 ? "We've emailed you a code. Enter it above." : "Enter your two-step login code above.";
+                    text = !string.IsNullOrEmpty(message) ? message : method == 1 ? "We've emailed you a code. Enter it above." : "Enter the 6-digit code from your authenticator app above.";
                     ShowMsg(msg, text, sendOnly ? "Success" : "Muted");
                     Find<TextBox>("CodeInput").Focus();
                     return;
@@ -1321,6 +1339,7 @@ namespace BitwardenMcpSettings
             if (Json.Bool(res, "ok") == true)
             {
                 if (vault != null) vault.State = "unlocked";
+                Show(Find<Button>("ResignLink"), false);
                 PaintAccount();
                 ShowMsg(msg, "Unlocked.", "Success");
                 RefreshVault();
@@ -1328,7 +1347,11 @@ namespace BitwardenMcpSettings
             else
             {
                 string m = Json.Str(res, "message");
-                ShowMsg(msg, !string.IsNullOrEmpty(m) ? m : Json.Str(res, "error") == "bad_password" ? "That master password wasn't accepted." : "Couldn't unlock the vault.", "Danger");
+                string err = Json.Str(res, "error");
+                ShowMsg(msg, !string.IsNullOrEmpty(m) ? m : err == "bad_password" ? "That master password didn't unlock your vault." : "Couldn't unlock the vault.", "Danger");
+                // A password that is right but was changed elsewhere can't unlock the copy saved
+                // on this computer; signing in again fetches the new one.
+                if (err == "bad_password" || err == "unknown") Motion.Slide(Find<Button>("ResignLink"), true, 0);
                 pb.Focus();
             }
         }
@@ -1381,8 +1404,10 @@ namespace BitwardenMcpSettings
                 twoStep = false;
                 Show(Find<Border>("TwoStepPanel"), false);
                 FillSignInFromConfig();
+                Show(Find<Button>("ResignLink"), false);
                 PaintAccount();
-                ShowMsg(msg, "Signed out.", "Success");
+                ShowMsg(msg, "Signed out. Sign in again below.", "Success");
+                Find<PasswordBox>("MasterInput").Focus();
                 RefreshVault();
             }
             else ShowMsg(msg, "Couldn't sign out. " + (fail ?? Json.Str(res, "message") ?? ""), "Danger");
@@ -1420,13 +1445,11 @@ namespace BitwardenMcpSettings
         {
             UpdateInfo u = Known;
             Find<TextBlock>("ExtVersion").Text = status != null && !string.IsNullOrEmpty(status.Version) ? status.Version : "Not installed yet";
-            Border box = Find<Border>("UpdIconBox");
             TextBlock icon = Find<TextBlock>("UpdIcon"), title = Find<TextBlock>("UpdTitle"), sub = Find<TextBlock>("UpdSub");
             string when = u != null && u.CheckedAt > DateTime.MinValue ? "checked " + Ago(u.CheckedAt) : "not checked yet";
             Button install = Find<Button>("UpdateBtn");
             if (UpdateAvailable)
             {
-                box.SetResourceReference(Border.BackgroundProperty, "AccentSoft");
                 icon.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
                 icon.Text = ((char)0xE896).ToString();
                 title.Text = "Version " + u.Latest + " is available";
@@ -1436,7 +1459,6 @@ namespace BitwardenMcpSettings
             }
             else
             {
-                box.SetResourceReference(Border.BackgroundProperty, "SuccessSoft");
                 icon.SetResourceReference(TextBlock.ForegroundProperty, "Success");
                 icon.Text = ((char)0xE73E).ToString();
                 title.Text = checking ? "Checking for updates" + Ch.Ellipsis : "You're up to date";
@@ -1580,66 +1602,136 @@ namespace BitwardenMcpSettings
         // Activity
         // =====================================================================================
 
+        List<HistoryEntry> history = new List<HistoryEntry>();
+        bool historyLegacy;
+        string historyStamp;
+
         void LoadActivity()
+        {
+            HideMsg(Find<TextBlock>("ActivityMsg"));
+            historyStamp = Store.Stamp(store.ActivityFile);
+            List<HistoryEntry> entries = new List<HistoryEntry>();
+            historyLegacy = false;
+            try
+            {
+                if (History.Exists(store)) entries = History.Read(store, 2000);
+                else
+                {
+                    // Before 0.4.1 only the server log had anything, and much less of it.
+                    foreach (ActivityEntry a in Activity.Read(store.LogFile, 300))
+                    {
+                        if (a.Event == "settings_in_force") continue;
+                        HistoryEntry h = new HistoryEntry();
+                        h.When = a.When;
+                        h.Kind = a.Event.StartsWith("secret", StringComparison.Ordinal) || a.Event == "reveal_to_model" ? "secrets"
+                            : a.Event.StartsWith("item_", StringComparison.Ordinal) ? "changes" : "account";
+                        h.Title = a.Text;
+                        h.Detail = "";
+                        h.Glyph = a.Glyph;
+                        h.Search = a.Text.ToLowerInvariant();
+                        entries.Add(h);
+                    }
+                    historyLegacy = entries.Count > 0;
+                }
+            }
+            catch (Exception e)
+            {
+                ShowMsg(Find<TextBlock>("ActivityMsg"), "Couldn't read the activity history. " + e.Message, "Danger");
+            }
+            history = entries;
+            Find<Button>("ClearActivity").IsEnabled = History.Exists(store);
+            RenderActivity();
+        }
+
+        void RenderActivity()
         {
             StackPanel list = Find<StackPanel>("ActivityList");
             list.Children.Clear();
-            List<ActivityEntry> entries;
-            try { entries = Activity.Read(store.LogFile, 300); }
-            catch { entries = new List<ActivityEntry>(); }
-            Find<TextBlock>("ActivityCount").Text = entries.Count == 0 ? "No recent activity" : entries.Count == 1 ? "1 recent event" : entries.Count + " recent events";
-            Show(Find<TextBlock>("ActivityEmpty"), entries.Count == 0);
+            string kind = Find<RadioButton>("ActSecrets").IsChecked == true ? "secrets"
+                : Find<RadioButton>("ActChanges").IsChecked == true ? "changes"
+                : Find<RadioButton>("ActAccount").IsChecked == true ? "account" : null;
+            string q = Find<TextBox>("ActivitySearch").Text.Trim().ToLowerInvariant();
+            List<HistoryEntry> shown = new List<HistoryEntry>();
+            foreach (HistoryEntry e in history)
+            {
+                if (kind != null && e.Kind != kind) continue;
+                if (q.Length > 0 && (e.Search ?? "").IndexOf(q, StringComparison.Ordinal) < 0) continue;
+                shown.Add(e);
+                if (shown.Count >= 400) break;
+            }
+
+            string count;
+            if (history.Count == 0) count = "Nothing recorded yet";
+            else if (shown.Count == history.Count) count = history.Count == 1 ? "1 event" : history.Count + " events";
+            else count = shown.Count + " of " + history.Count + " events";
+            if (historyLegacy) count += Ch.Dot + "from the older, less detailed log";
+            Find<TextBlock>("ActivityCount").Text = count;
+            TextBlock empty = Find<TextBlock>("ActivityEmpty");
+            empty.Text = history.Count == 0
+                ? (model.ActivityLog ? "Nothing yet. When your assistant searches your vault, reads or copies a password, or prepares a change, it shows up here." : "The activity history is switched off.")
+                : "Nothing matches.";
+            Show(empty, shown.Count == 0);
+
             DateTime lastDay = DateTime.MinValue;
-            foreach (ActivityEntry e in entries)
+            foreach (HistoryEntry e in shown)
             {
                 DateTime local = e.When.ToLocalTime();
                 if (local.Date != lastDay)
                 {
                     lastDay = local.Date;
                     TextBlock day = new TextBlock();
-                    day.Text = local.Date == DateTime.Today ? "Today" : local.Date == DateTime.Today.AddDays(-1) ? "Yesterday" : local.ToString("dddd, d MMMM yyyy", CultureInfo.CurrentCulture);
+                    day.Text = local.Date == DateTime.Today ? "Today" : local.Date == DateTime.Today.AddDays(-1) ? "Yesterday" : local.ToString("dddd d MMMM yyyy", CultureInfo.CurrentCulture);
                     day.FontSize = 12;
                     day.FontWeight = FontWeights.SemiBold;
-                    day.Margin = new Thickness(12, list.Children.Count == 0 ? 2 : 14, 0, 6);
+                    day.Margin = new Thickness(0, list.Children.Count == 0 ? 0 : 18, 0, 4);
                     day.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
                     list.Children.Add(day);
                 }
+                Border rowBox = new Border();
+                rowBox.Padding = new Thickness(0, 9, 0, 9);
+                rowBox.BorderThickness = new Thickness(0, 0, 0, 1);
+                rowBox.SetResourceReference(Border.BorderBrushProperty, "Line");
                 Grid row = new Grid();
-                row.Margin = new Thickness(4, 0, 4, 2);
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(30) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                Border ic = new Border();
-                ic.Width = 30;
-                ic.Height = 30;
-                ic.CornerRadius = new CornerRadius(15);
-                ic.Margin = new Thickness(8, 4, 12, 4);
-                ic.SetResourceReference(Border.BackgroundProperty, "Surface2");
                 TextBlock g = new TextBlock();
                 g.FontFamily = (FontFamily)Window.FindResource("Icons");
-                g.FontSize = 13;
-                g.Text = ((char)Convert.ToInt32(e.Glyph, 16)).ToString();
-                g.HorizontalAlignment = HorizontalAlignment.Center;
-                g.VerticalAlignment = VerticalAlignment.Center;
-                g.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
-                ic.Child = g;
-                row.Children.Add(ic);
+                g.FontSize = 14;
+                g.Margin = new Thickness(0, 2, 0, 0);
+                g.VerticalAlignment = VerticalAlignment.Top;
+                try { g.Text = ((char)Convert.ToInt32(e.Glyph, 16)).ToString(); } catch { g.Text = ""; }
+                g.SetResourceReference(TextBlock.ForegroundProperty, e.Tone ?? "Muted");
+                row.Children.Add(g);
+                StackPanel words = new StackPanel();
                 TextBlock t = new TextBlock();
-                t.Text = e.Text;
+                t.Text = e.Title;
                 t.TextWrapping = TextWrapping.Wrap;
-                t.VerticalAlignment = VerticalAlignment.Center;
                 t.SetResourceReference(TextBlock.ForegroundProperty, "Fg");
-                Grid.SetColumn(t, 1);
-                row.Children.Add(t);
+                words.Children.Add(t);
+                if (!string.IsNullOrEmpty(e.Detail))
+                {
+                    TextBlock dt = new TextBlock();
+                    dt.Text = e.Detail;
+                    dt.FontSize = 12;
+                    dt.Margin = new Thickness(0, 2, 0, 0);
+                    dt.TextWrapping = TextWrapping.Wrap;
+                    dt.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
+                    words.Children.Add(dt);
+                }
+                Grid.SetColumn(words, 1);
+                row.Children.Add(words);
                 TextBlock time = new TextBlock();
                 time.Text = local.ToString("t", CultureInfo.CurrentCulture);
                 time.FontSize = 12;
-                time.Margin = new Thickness(12, 0, 10, 0);
-                time.VerticalAlignment = VerticalAlignment.Center;
+                time.Margin = new Thickness(16, 1, 0, 0);
+                time.VerticalAlignment = VerticalAlignment.Top;
+                time.ToolTip = local.ToString("F", CultureInfo.CurrentCulture);
                 time.SetResourceReference(TextBlock.ForegroundProperty, "Muted");
                 Grid.SetColumn(time, 2);
                 row.Children.Add(time);
-                list.Children.Add(row);
+                rowBox.Child = row;
+                list.Children.Add(rowBox);
             }
         }
 
@@ -1697,17 +1789,8 @@ namespace BitwardenMcpSettings
 
         void BuildDots()
         {
-            StackPanel dots = Find<StackPanel>("StepDots");
-            for (int i = 0; i < 4; i++)
-            {
-                Border d = new Border();
-                d.Height = 8;
-                d.Width = 8;
-                d.CornerRadius = new CornerRadius(4);
-                d.Margin = new Thickness(0, 0, 6, 0);
-                d.SetResourceReference(Border.BackgroundProperty, "LineStrong");
-                dots.Children.Add(d);
-            }
+            // No step dots: each step's own "STEP 2 OF 4" heading says where you are.
+            Find<StackPanel>("StepDots").Visibility = Visibility.Collapsed;
         }
 
         public void ShowWelcome(int step)
@@ -1734,13 +1817,6 @@ namespace BitwardenMcpSettings
             for (int i = 1; i <= 4; i++) Show(Find<StackPanel>("WStep" + i), i == n);
             Motion.Enter(Find<StackPanel>("WStep" + n), 14);
             Find<ScrollViewer>("WelcomeScroller").ScrollToVerticalOffset(0);
-            StackPanel dots = Find<StackPanel>("StepDots");
-            for (int i = 0; i < dots.Children.Count; i++)
-            {
-                Border d = (Border)dots.Children[i];
-                Motion.To(d, FrameworkElement.WidthProperty, i == n - 1 ? 26 : 8, 200);
-                d.SetResourceReference(Border.BackgroundProperty, i < n ? "Accent" : "LineStrong");
-            }
             PaintAccount();
             PaintWelcomeButtons();
             if (n == 2) RefreshVault();

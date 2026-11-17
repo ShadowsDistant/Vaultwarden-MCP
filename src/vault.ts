@@ -1,3 +1,4 @@
+import * as activity from './activity.js';
 import { bw, BwError } from './bw.js';
 import { log } from './log.js';
 import { isUuid, Sanitizer } from './sanitize.js';
@@ -166,13 +167,24 @@ export async function getRawItem(id: string, opts: { fresh?: boolean } = {}): Pr
   if (!isUuid(id)) {
     throw new BwError('not_found', 'That is not an item id.', 'Search first and use the id from the result.');
   }
+  activity.noteId(id);
   const hit = itemCache.get(id);
-  if (!opts.fresh && hit && Date.now() - hit.at < ITEM_CACHE_MS) return hit.item;
+  if (!opts.fresh && hit && Date.now() - hit.at < ITEM_CACHE_MS) {
+    activity.noteItem(hit.item);
+    return hit.item;
+  }
 
   const item = await bw<BwItem>(['get', 'item', id], { env: sessionEnv() });
   if (!item || typeof item !== 'object' || !item.id) throw new BwError('not_found', 'No such item.');
   itemCache.set(id, { at: Date.now(), item });
+  activity.noteItem(item);
   return item;
+}
+
+/** An item if it is already in memory, without asking the CLI. For naming things in the log. */
+export function cachedItem(id: string): BwItem | undefined {
+  const hit = itemCache.get(id);
+  return hit && Date.now() - hit.at < ITEM_CACHE_MS ? hit.item : undefined;
 }
 
 export type SearchQuery = {

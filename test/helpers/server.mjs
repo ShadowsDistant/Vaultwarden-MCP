@@ -236,6 +236,26 @@ export async function startServer({ env = {}, seed = true, seedState = {}, cards
       }
     },
     stderrText: () => stderr,
+    /** The activity log, raw. */
+    activityText: () => {
+      try {
+        return fs.readFileSync(path.join(home, 'activity.jsonl'), 'utf8');
+      } catch {
+        return '';
+      }
+    },
+    /** The activity log, one object per line. */
+    activity: () => {
+      try {
+        return fs
+          .readFileSync(path.join(home, 'activity.jsonl'), 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((l) => JSON.parse(l));
+      } catch {
+        return [];
+      }
+    },
     /**
      * Changes settings.json under a running server. The mtime is pushed forward so the change
      * is seen even when it lands within the file system's timestamp resolution of the last one.

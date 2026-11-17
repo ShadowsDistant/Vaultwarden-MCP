@@ -54,6 +54,12 @@ export type Settings = {
    * animations off for other reasons and still want them here.
    */
   animations: 'on' | 'off' | 'system';
+  /**
+   * Keep a local record of what was done with the vault: which items were searched for, viewed
+   * or copied, by whom and when. Item names and sites only, never a secret. Not a permission,
+   * so a broken settings file leaves it as written.
+   */
+  activityLog: boolean;
 };
 
 export type SettingsState = {
@@ -79,6 +85,7 @@ export const DEFAULTS: Settings = {
   clipboardClearSeconds: 30,
   updateCheck: true,
   animations: 'on',
+  activityLog: true,
 };
 
 /**
@@ -294,6 +301,7 @@ function readState(): SettingsState {
     take('allowTrash', (v) => (typeof v === 'boolean' ? v : undefined));
     take('updateCheck', (v) => (typeof v === 'boolean' ? v : undefined));
     take('animations', (v) => (v === 'on' || v === 'off' || v === 'system' ? v : undefined));
+    take('activityLog', (v) => (typeof v === 'boolean' ? v : undefined));
     take('access', (v) => accessFrom(v));
     take('trustedSites', (v) => (Array.isArray(v) ? v.map((x) => String(x)) : undefined));
     take('idleLockMinutes', (v) => (typeof v === 'number' && Number.isFinite(v) ? clamp(v, 0, 1440) : undefined));

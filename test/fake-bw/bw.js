@@ -12,6 +12,9 @@
 //   FAKE_BW_STATUS_EXIT1      `status` prints valid JSON and exits 1, as the real CLI does
 //                             when the server is unreachable (bitwarden/clients#18373)
 //   FAKE_BW_FAIL=<command>    make one command fail with a network error
+//   FAKE_BW_REQUIRE_2FA       login needs a two-step code (FAKE_BW_2FA_CODE, default 123456)
+//   FAKE_BW_2FA_PROVIDERS     e.g. "0,1": the account's two-step methods
+//   FAKE_BW_OLD_UNLOCK_ERROR  a wrong unlock password says "Invalid master password." (older CLIs)
 //   FAKE_BW_CALL_LOG=<path>   append every invocation, so a test can assert how many times
 //                             the CLI was actually spawned — which is what card latency is
 
@@ -170,9 +173,16 @@ switch (cmd) {
     if (password !== PASSWORD) errOut('Username or password is incorrect. Try again.');
     if (process.env.FAKE_BW_REQUIRE_2FA) {
       const code = opt('--code');
+      // FAKE_BW_2FA_PROVIDERS="0,1": the account's two-step methods. With more than one and no
+      // --method, the real CLI cannot choose without a prompt and gives up; a method the account
+      // does not have is refused outright.
+      const providers = (process.env.FAKE_BW_2FA_PROVIDERS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+      const method = opt('--method');
+      if (providers.length && method !== undefined && !providers.includes(method)) errOut('Invalid two-step login method.');
+      if (providers.length > 1 && method === undefined) errOut('Login failed. No provider selected.');
       if (!code) {
         // The real CLI emails a code when the chosen method is email, then still says this.
-        if (opt('--method') === '1') {
+        if (method === '1' || (method === undefined && providers.length === 1 && providers[0] === '1')) {
           state.emailedCodes = (state.emailedCodes ?? 0) + 1;
           save(state);
         }
@@ -202,7 +212,8 @@ switch (cmd) {
     const envName = opt('--passwordenv');
     const password = envName ? process.env[envName] : positional[1];
     if (!password) errOut('Master password is required. Try again in interactive mode or provide a password file or environment variable.');
-    if (password !== PASSWORD) errOut('Invalid master password.');
+    // CLI 2026.8 reports a wrong master password as a failed decryption, not in words.
+    if (password !== PASSWORD) errOut(process.env.FAKE_BW_OLD_UNLOCK_ERROR ? 'Invalid master password.' : 'Cryptography error, The decryption operation failed');
     if (process.env.FAKE_BW_EMPTY_UNLOCK_ONCE && !state.usedEmptyUnlock) {
       state.usedEmptyUnlock = true;
       state.session = null;

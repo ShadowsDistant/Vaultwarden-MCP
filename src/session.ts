@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import * as activity from './activity.js';
 import { bw, BwError, withBwLock } from './bw.js';
 import { CONFIG, readConfig, serverUrlFixedByEnv, validateServerUrl, writeConfig } from './config.js';
 import { log } from './log.js';
@@ -165,6 +166,7 @@ function armIdleTimer(): void {
         return;
       }
       log.audit('idle_lock', { afterMinutes: minutes });
+      activity.record({ actor: 'system', action: 'idle_lock', ok: true });
       await lock().catch(() => undefined);
     })();
   }, Math.max(1000, due));
@@ -337,6 +339,17 @@ function sameUrl(a: string | null | undefined, b: string | null | undefined): bo
  * after a fresh login returns an empty session key (bitwarden/clients#18455). Locking and
  * asking again clears it. Returns a key that has been proven to decrypt, or null.
  */
+/**
+ * How CLI 2026.8 says "wrong master password" on unlock: the master key fails to decrypt the
+ * stored user key. It says the same when the password is right but was changed since this
+ * computer last signed in, because the stored key is the old one. Only an unlock is read this
+ * way; the same words from any other command mean something else.
+ */
+const WRONG_UNLOCK = /decryption operation failed|cryptography error/i;
+
+export const UNLOCK_REFUSED =
+  "That master password didn't unlock your vault. If you changed your master password since you last signed in here, sign out and sign in again.";
+
 async function unlockWith(password: string): Promise<string | null> {
   const attempt = async (): Promise<string | 'wrong' | null> => {
     try {
@@ -347,7 +360,7 @@ async function unlockWith(password: string): Promise<string | null> {
       const key = typeof data?.raw === 'string' ? data.raw.trim() : '';
       return key || null;
     } catch (e) {
-      if (e instanceof BwError && e.code === 'invalid_password') return 'wrong';
+      if (e instanceof BwError && (e.code === 'invalid_password' || WRONG_UNLOCK.test(`${e.raw ?? ''} ${e.message}`))) return 'wrong';
       throw e;
     }
   };
@@ -475,6 +488,11 @@ const fail = (error: AccountError, message: string): AccountResult => ({ ok: fal
 function explain(e: unknown, ctx: { method?: number; code?: string; email?: string }): AccountResult {
   if (!(e instanceof BwError)) return fail('unknown', e instanceof Error ? e.message.slice(0, 200) : 'Something went wrong.');
   const raw = (e.raw ?? e.message).toLowerCase();
+  // Several two-step methods and no --method: the CLI cannot choose without a prompt.
+  if (/no provider selected/.test(raw)) {
+    return fail('code_required', 'Two-step login is on for this account. Choose how you get your codes and enter the current one.');
+  }
+  if (/invalid two-step login method/.test(raw)) return fail('bad_code', "That two-step method isn't set up on your account. Pick another one.");
   if (/code is required/.test(raw)) {
     if (ctx.method === 1 && !ctx.code) {
       return fail('code_required', `Bitwarden has emailed a code to ${ctx.email ?? 'your account email'}. Enter it to finish signing in.`);
@@ -604,7 +622,7 @@ export async function unlockWithPassword(password: string): Promise<AccountResul
     if (!s.status || s.status === 'unauthenticated') return fail('not_signed_in', 'Not signed in. Sign in first.');
     return await withBwLock(async () => {
       const key = await unlockWith(password);
-      if (!key) return fail('bad_password', 'That master password was not accepted.');
+      if (!key) return fail('bad_password', UNLOCK_REFUSED);
       if (s.userEmail) knownEmail = s.userEmail;
       if (s.lastSync) knownLastSync = s.lastSync;
       await adopt(key, { share: true });

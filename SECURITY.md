@@ -119,6 +119,14 @@ until you lock explicitly. Anyone who can use your Windows account can then use 
 the master password, which is the same trade Bitwarden's own "Never" vault timeout makes. A settings
 file that will not parse can never keep it in force.
 
+**The activity history** (`activity.jsonl`, shown on the Settings app's Activity page) records what
+the assistant did: searches (the query text and a count), item names, the site's host, which field
+(password, one-time code or notes) was read or copied and whether you allowed it, changes, and
+sign-in and locking. It is plain text in your profile, readable by anything running as you, so it
+deliberately leaves out usernames, secrets, notes, full addresses and session keys; the sentinel
+test greps it after every secret-touching flow. It is capped at about 2 MB, can be cleared from the
+Activity page, and `"activityLog": false` stops it.
+
 ### 4. The vault address cannot be reached from a conversation
 
 There is no tool to set the server URL, and no tool takes a hostname in any argument. This is the

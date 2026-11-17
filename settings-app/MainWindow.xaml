@@ -734,15 +734,8 @@
               <ColumnDefinition Width="Auto" />
               <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Grid Width="10" Height="10" Margin="2,0,10,0" VerticalAlignment="Top">
-              <Ellipse x:Name="ServerHalo" Fill="{DynamicResource Success}" Opacity="0" RenderTransformOrigin="0.5,0.5">
-                <Ellipse.RenderTransform>
-                  <ScaleTransform />
-                </Ellipse.RenderTransform>
-              </Ellipse>
-              <Ellipse x:Name="ServerDot" Width="8" Height="8" Fill="{DynamicResource Faint}" />
-            </Grid>
-            <StackPanel Grid.Column="1" Margin="0,-3,0,0">
+            <TextBlock x:Name="ServerIcon" Style="{StaticResource Icon}" FontSize="14" Text="&#xE839;" Foreground="{DynamicResource Muted}" Margin="0,1,10,0" VerticalAlignment="Top" />
+            <StackPanel Grid.Column="1">
               <TextBlock x:Name="ServerTitle" Text="Extension not running" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource Fg}" TextTrimming="CharacterEllipsis" />
               <TextBlock x:Name="ServerSub" Text="" FontSize="11.5" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" />
             </StackPanel>
@@ -779,6 +772,9 @@
         <RowDefinition Height="Auto" />
       </Grid.RowDefinitions>
 
+      <Border x:Name="BusyTrack" Grid.Row="0" Height="2" VerticalAlignment="Top" Visibility="Hidden" ClipToBounds="True" Background="{DynamicResource AccentSoft}" IsHitTestVisible="False" Panel.ZIndex="5">
+        <Border x:Name="BusySegment" HorizontalAlignment="Left" Width="120" Background="{DynamicResource Accent}" CornerRadius="1" />
+      </Border>
       <StackPanel Grid.Row="0" Margin="40,16,36,0">
         <Border x:Name="UpdateBanner" Visibility="Collapsed" CornerRadius="10" Padding="14,10" BorderThickness="1" Margin="0,0,0,8" Background="{DynamicResource AccentSoft}" BorderBrush="{DynamicResource AccentLine}">
           <Border.RenderTransform>
@@ -823,18 +819,13 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                   </Grid.ColumnDefinitions>
-                  <Border x:Name="Avatar" Width="46" Height="46" CornerRadius="23" Background="{DynamicResource AccentSoft}" Margin="0,0,14,0" VerticalAlignment="Center">
-                    <TextBlock x:Name="AvatarText" Text="&#xE77B;" FontFamily="{StaticResource Icons}" FontSize="18" Foreground="{DynamicResource Accent}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                  </Border>
+                  <TextBlock x:Name="AvatarText" Text="&#xE77B;" FontFamily="{StaticResource Icons}" FontSize="20" Foreground="{DynamicResource Muted}" Margin="2,0,16,0" VerticalAlignment="Center" />
                   <StackPanel Grid.Column="1" VerticalAlignment="Center">
                     <TextBlock x:Name="AcctTitle" Style="{StaticResource Label}" FontSize="15" Text="Not signed in" />
                     <TextBlock x:Name="AcctSub" Style="{StaticResource Desc}" Text="" />
                   </StackPanel>
-                  <Border x:Name="AcctChip" Grid.Column="2" CornerRadius="999" Padding="10,4" VerticalAlignment="Center" Background="{DynamicResource Surface3}">
-                    <StackPanel Orientation="Horizontal">
-                      <Ellipse x:Name="AcctDot" Width="7" Height="7" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{DynamicResource Faint}" />
-                      <TextBlock x:Name="AcctChipText" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Fg}" Text="Signed out" />
-                    </StackPanel>
+                  <Border x:Name="AcctChip" Grid.Column="2" CornerRadius="5" Padding="8,3" VerticalAlignment="Center" Background="{DynamicResource Surface3}">
+                    <TextBlock x:Name="AcctChipText" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Fg}" Text="Signed out" />
                   </Border>
                 </Grid>
 
@@ -848,6 +839,7 @@
                 </Grid>
 
                 <TextBlock x:Name="AcctMessage" Style="{StaticResource Message}" />
+                <Button x:Name="ResignLink" Style="{StaticResource LinkBtn}" HorizontalAlignment="Left" Margin="0,8,0,0" Visibility="Collapsed" Content="Sign out and sign in again" />
 
                 <WrapPanel x:Name="AcctActions" Margin="0,16,0,0">
                   <Button x:Name="LockBtn" Style="{StaticResource SmallBtn}" Margin="0,0,8,0">
@@ -1147,8 +1139,8 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                   </Grid.ColumnDefinitions>
-                  <Border x:Name="UpdIconBox" Width="46" Height="46" CornerRadius="23" Background="{DynamicResource SuccessSoft}" Margin="0,0,14,0" VerticalAlignment="Center">
-                    <TextBlock x:Name="UpdIcon" Style="{StaticResource Icon}" Text="&#xE73E;" FontSize="18" Foreground="{DynamicResource Success}" />
+                  <Border x:Name="UpdIconBox" Width="24" Margin="2,0,14,0" VerticalAlignment="Center" Background="Transparent">
+                    <TextBlock x:Name="UpdIcon" Style="{StaticResource Icon}" Text="&#xE73E;" FontSize="20" Foreground="{DynamicResource Success}" />
                   </Border>
                   <StackPanel Grid.Column="1" VerticalAlignment="Center">
                     <TextBlock x:Name="UpdTitle" Style="{StaticResource Label}" FontSize="15" Text="You're up to date" />
@@ -1208,19 +1200,56 @@
           <!-- ============ Activity ============ -->
           <StackPanel x:Name="PageActivity" Visibility="Collapsed">
             <TextBlock Style="{StaticResource PageTitle}" Text="Activity" />
-            <TextBlock Style="{StaticResource PageDesc}" Text="What the extension has done recently, from its log on this computer. Passwords and vault contents are never written to the log." />
-            <Border Style="{StaticResource Card}" Margin="0,18,0,0" Padding="8,8">
+            <TextBlock Style="{StaticResource PageDesc}" Text="Every time your AI assistant searched your vault, read or copied a password, or prepared a change, and what you allowed. Kept only on this computer. It names items and sites, never usernames, passwords or codes." />
+            <Border Style="{StaticResource Card}" Margin="0,18,0,0">
               <StackPanel>
-                <Grid Margin="12,6,6,8">
+                <Grid>
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                   </Grid.ColumnDefinitions>
-                  <TextBlock x:Name="ActivityCount" Style="{StaticResource Desc}" Margin="0" VerticalAlignment="Center" Text="" />
-                  <Button x:Name="RefreshActivity" Grid.Column="1" Style="{StaticResource SmallBtn}" Content="Refresh" />
+                  <WrapPanel VerticalAlignment="Center">
+                    <RadioButton x:Name="ActAll" GroupName="act" Style="{StaticResource Pill}" Content="All" IsChecked="True" />
+                    <RadioButton x:Name="ActSecrets" GroupName="act" Style="{StaticResource Pill}" Content="Passwords and codes" />
+                    <RadioButton x:Name="ActChanges" GroupName="act" Style="{StaticResource Pill}" Content="Changes" />
+                    <RadioButton x:Name="ActAccount" GroupName="act" Style="{StaticResource Pill}" Content="Sign-in and locking" />
+                  </WrapPanel>
+                  <Button x:Name="RefreshActivity" Grid.Column="1" Style="{StaticResource SmallBtn}" Content="Refresh" VerticalAlignment="Top" Margin="12,0,0,0" />
                 </Grid>
+                <TextBox x:Name="ActivitySearch" Tag="Search by item, site or action" Margin="0,14,0,0" AutomationProperties.Name="Search activity" />
+                <TextBlock x:Name="ActivityCount" Style="{StaticResource Desc}" Margin="0,12,0,6" Text="" />
                 <StackPanel x:Name="ActivityList" />
-                <TextBlock x:Name="ActivityEmpty" Style="{StaticResource Desc}" Margin="12,8,12,12" FontStyle="Italic" Visibility="Collapsed" Text="Nothing yet. Once you use your vault through your assistant, it shows up here." />
+                <TextBlock x:Name="ActivityEmpty" Style="{StaticResource Desc}" Margin="0,8,0,4" Visibility="Collapsed" Text="" />
+                <TextBlock x:Name="ActivityMsg" Style="{StaticResource Message}" />
+              </StackPanel>
+            </Border>
+
+            <TextBlock Style="{StaticResource SectionTitle}" Text="History" />
+            <Border Style="{StaticResource Card}">
+              <StackPanel>
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Style="{StaticResource RowText}">
+                    <TextBlock Style="{StaticResource Label}" Text="Keep an activity history" />
+                    <TextBlock Style="{StaticResource Desc}" Text="Turn this off and nothing new is recorded. What's already here stays until you clear it." />
+                  </StackPanel>
+                  <CheckBox x:Name="ActivityLogSwitch" Grid.Column="1" Style="{StaticResource Switch}" AutomationProperties.Name="Keep an activity history" />
+                </Grid>
+                <Border Style="{StaticResource Divider}" />
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Style="{StaticResource RowText}">
+                    <TextBlock Style="{StaticResource Label}" Text="Clear history" />
+                    <TextBlock Style="{StaticResource Desc}" Text="Deletes everything on this page from this computer." />
+                  </StackPanel>
+                  <Button x:Name="ClearActivity" Grid.Column="1" Style="{StaticResource SmallBtn}" Content="Clear" />
+                </Grid>
               </StackPanel>
             </Border>
           </StackPanel>

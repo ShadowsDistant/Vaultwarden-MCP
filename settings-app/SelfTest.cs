@@ -198,6 +198,25 @@ namespace BitwardenMcpSettings
             Check(a.Count == 3 && a[0].Event == "brand_new_event" && a[2].Event == "settings_in_force", "audit lines are read newest first, other lines skipped");
             Check(a.Count == 3 && a[1].Text == "Vault unlocked (vault.example.com)" && a[1].Text.IndexOf("secret", StringComparison.Ordinal) < 0, "only the event and its host are shown");
             Check(a.Count == 3 && a[0].Text == "Brand new event", "an unknown event is shown in words");
+
+            // activity.jsonl, the detailed history.
+            File.WriteAllText(store.ActivityFile,
+                "{\"v\":1,\"at\":\"2026-11-17T08:00:00.000Z\",\"actor\":\"assistant\",\"app\":\"Claude\",\"action\":\"search\",\"ok\":true,\"query\":\"git\",\"count\":2}\n" +
+                "not json\n" +
+                "{\"v\":1,\"at\":\"2026-11-17T08:00:05.000Z\",\"actor\":\"assistant\",\"app\":\"Claude\",\"action\":\"copy_secret\",\"ok\":true,\"item\":{\"id\":\"x\",\"name\":\"GitHub\",\"host\":\"github.com\"},\"field\":\"password\",\"outcome\":\"allowed\",\"via\":\"trusted_site\"}\n" +
+                "{\"v\":1,\"at\":\"2026-11-17T08:00:09.000Z\",\"actor\":\"assistant\",\"app\":\"Cursor\",\"action\":\"read_secret\",\"ok\":false,\"item\":{\"id\":\"y\",\"name\":\"Bank\"},\"field\":\"totp\",\"outcome\":\"declined\",\"error\":\"The user declined.\"}\n" +
+                "{\"v\":1,\"at\":\"2026-11-17T08:01:00.000Z\",\"actor\":\"you\",\"action\":\"apply_change\",\"ok\":true,\"item\":{\"id\":\"x\",\"name\":\"GitHub\"},\"outcome\":\"edit\"}\n" +
+                "{\"v\":1,\"at\":\"2026-11-17T08:02:00.000Z\",\"actor\":\"settings_app\",\"action\":\"unlock\",\"ok\":false,\"error\":\"That master password didn't unlock your vault.\"}\n" +
+                "{\"v\":1,\"at\":\"2026-11-17T08:03:00.000Z\",\"action\":\"future_thing\",\"ok\":true}\n");
+            List<HistoryEntry> h = History.Read(store, 100);
+            Check(h.Count == 6 && h[5].Title == "Claude searched your vault for \"git\"" && h[5].Detail == "2 results", "a search reads as a sentence, newest first, bad lines skipped");
+            Check(h.Count == 6 && h[4].Title == "Claude copied the password for GitHub to your clipboard" && h[4].Kind == "secrets" && h[4].Detail.Contains("trusted site") && h[4].Detail.Contains("github.com"), "a copied password names the app, the item, the site and why it was allowed");
+            Check(h.Count == 6 && h[3].Title.StartsWith("You declined Cursor's request to read the one-time code for Bank", StringComparison.Ordinal) && h[3].Tone == "Danger", "a declined request says so");
+            Check(h.Count == 6 && h[2].Title == "You confirmed changes to GitHub" && h[2].Kind == "changes", "a confirmed change is the user's");
+            Check(h.Count == 6 && h[1].Kind == "account" && h[1].Detail.Contains("didn't unlock") && h[1].Detail.Contains("in Settings"), "a failed unlock in Settings shows the reason");
+            Check(h.Count == 6 && h[0].Title.Length > 0, "an unknown action still shows");
+            History.Clear(store);
+            Check(!History.Exists(store) && History.Read(store, 10).Count == 0, "clearing removes the history");
         }
 
         static void ShortcutFile(string home)

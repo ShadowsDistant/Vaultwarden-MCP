@@ -80,6 +80,46 @@ test('a two-step account is asked for a code, and an emailed code is sent on req
   assert.ok(!s.logText().includes('123456'), 'two-step codes are not logged');
 });
 
+test('an authenticator-app code signs in with one request', async (t) => {
+  const s = await signedOut({ FAKE_BW_REQUIRE_2FA: '1', FAKE_BW_2FA_PROVIDERS: '0' });
+  t.after(() => s.close());
+  const r = await s.ipc({ op: 'login', serverUrl: URL_, email: 'shado@example.com', password: MASTER_PASSWORD, method: 0, code: '123456' });
+  assert.deepEqual(r, { ok: true, state: 'unlocked' });
+  assert.equal((await s.callJson('vault_status')).json.data.state, 'unlocked');
+});
+
+test('an account with several two-step methods is asked to choose, and a wrong code is named as such', async (t) => {
+  const s = await signedOut({ FAKE_BW_REQUIRE_2FA: '1', FAKE_BW_2FA_PROVIDERS: '0,1' });
+  t.after(() => s.close());
+  // The real CLI says "Login failed. No provider selected." here; that is a question, not a failure.
+  const first = await s.ipc({ op: 'login', serverUrl: URL_, email: 'shado@example.com', password: MASTER_PASSWORD });
+  assert.equal(first.error, 'code_required');
+  assert.match(first.message, /Choose how you get your codes/);
+
+  const wrong = await s.ipc({ op: 'login', serverUrl: URL_, email: 'shado@example.com', password: MASTER_PASSWORD, method: 0, code: '654321' });
+  assert.equal(wrong.error, 'bad_code');
+
+  const notSetUp = await s.ipc({ op: 'login', serverUrl: URL_, email: 'shado@example.com', password: MASTER_PASSWORD, method: 3, code: 'cccccc' });
+  assert.equal(notSetUp.error, 'bad_code');
+  assert.match(notSetUp.message, /isn't set up/);
+
+  const right = await s.ipc({ op: 'login', serverUrl: URL_, email: 'shado@example.com', password: MASTER_PASSWORD, method: 0, code: '123456' });
+  assert.deepEqual(right, { ok: true, state: 'unlocked' });
+});
+
+test('a wrong master password on unlock is named as one, not as an unknown error', async (t) => {
+  // CLI 2026.8 says "Cryptography error, The decryption operation failed" for this.
+  const s = await startServer();
+  t.after(() => s.close());
+  const r = await s.ipc({ op: 'unlock', password: 'not it' });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'bad_password');
+  assert.match(r.message, /sign out and sign in again/);
+  assert.equal((await s.callJson('vault_status')).json.data.state, 'locked');
+  const ok = await s.ipc({ op: 'unlock', password: MASTER_PASSWORD });
+  assert.deepEqual(ok, { ok: true, state: 'unlocked' });
+});
+
 test('an unsupported two-step method is refused before the CLI is asked', async (t) => {
   const s = await signedOut();
   t.after(() => s.close());

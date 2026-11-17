@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import * as activity from './activity.js';
 import { log } from './log.js';
 import * as session from './session.js';
 
@@ -87,6 +88,17 @@ async function handle(req: Request, onChange: () => void): Promise<Record<string
                 })
               : await session.unlockWithPassword(String(req.password ?? ''));
         log.audit('settings_app_account', { op, ok: r.ok, ...(r.ok ? {} : { error: r.error }) });
+        // Asking for the two-step code is a step of signing in, not a failure of it. Messages
+        // that name the account's email are replaced, since the log holds no account names.
+        if (r.ok || r.error !== 'code_required') {
+          activity.record({
+            actor: 'settings_app',
+            action: op === 'unlock' ? 'unlock' : 'sign_in',
+            ok: r.ok,
+            ...(op === 'login_apikey' ? { via: 'api_key' } : {}),
+            ...(r.ok ? {} : { outcome: r.error, error: r.error === 'signed_in_elsewhere' ? 'Already signed in to another account or server.' : r.message }),
+          });
+        }
         return r.ok ? { ok: true, state: 'unlocked' } : r;
       } finally {
         busy = false;
@@ -96,11 +108,13 @@ async function handle(req: Request, onChange: () => void): Promise<Record<string
     case 'lock':
       await session.lock();
       log.audit('settings_app_account', { op, ok: true });
+      activity.record({ actor: 'settings_app', action: 'lock', ok: true });
       onChange();
       return { ok: true };
     case 'logout':
       await session.logout();
       log.audit('settings_app_account', { op, ok: true });
+      activity.record({ actor: 'settings_app', action: 'sign_out', ok: true });
       onChange();
       return { ok: true };
     default:

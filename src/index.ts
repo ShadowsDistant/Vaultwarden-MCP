@@ -22,6 +22,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { getUiCapability } from '@modelcontextprotocol/ext-apps/server';
 
+import { setClient as setActivityClient } from './activity.js';
 import { bwVersion } from './bw.js';
 import { CONFIG, ensureHome, PRODUCT, readConfig } from './config.js';
 import { flushClipboardClears } from './clipboard.js';
@@ -161,6 +162,8 @@ async function main(): Promise<void> {
     const ui = Boolean(getUiCapability(caps as never));
     cardsSupported = ui;
     const active = setClientSupportsCards(ui);
+    // Which AI app this is, so the activity log can say who did what.
+    setActivityClient(server.server.getClientVersion()?.name);
     const st = settingsState();
     log.info('client connected', {
       client: server.server.getClientVersion()?.name,

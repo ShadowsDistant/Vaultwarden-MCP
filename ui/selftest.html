@@ -66,7 +66,8 @@
     check('the reveal control exists', Boolean(reveal));
     if (reveal) {
       reveal.click();
-      check('a click shows a working state', reveal.classList.contains('working') || Boolean(doc.querySelector('.spin')));
+      check('a click shows a working state', reveal.classList.contains('working') && reveal.disabled);
+      check('nothing spins while it works', !doc.querySelector('.spin, circle'));
       setTimeout(() => {
         const value = [...doc.querySelectorAll('.field')]
           .find((f) => f.querySelector('.field-label')?.textContent === 'Password')

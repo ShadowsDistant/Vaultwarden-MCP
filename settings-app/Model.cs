@@ -30,6 +30,8 @@ namespace BitwardenMcpSettings
         public int RevealSeconds = 30;
         public int ClipboardClearSeconds = 30;
         public bool UpdateCheck = true;
+        /** Whether the server keeps activity.jsonl, the history shown on the Activity page. */
+        public bool ActivityLog = true;
         /** App-only: "system", "light" or "dark". The server ignores it. */
         public string Theme = "system";
         /** App-only: "on", "off" or "system". On by default: motion is part of how the app reads. */
@@ -40,7 +42,7 @@ namespace BitwardenMcpSettings
         public static readonly string[] Known =
         {
             "cards", "allowChanges", "allowTrash", "access", "trustedSites", "lockMode", "idleLockMinutes",
-            "revealSeconds", "clipboardClearSeconds", "updateCheck", "theme", "animations"
+            "revealSeconds", "clipboardClearSeconds", "updateCheck", "activityLog", "theme", "animations"
         };
 
         public SettingsModel Clone()
@@ -95,6 +97,7 @@ namespace BitwardenMcpSettings
             if (d.TryGetValue("allowChanges", out v)) { if (v is bool) AllowChanges = (bool)v; else warnings.Add("allowChanges"); }
             if (d.TryGetValue("allowTrash", out v)) { if (v is bool) AllowTrash = (bool)v; else warnings.Add("allowTrash"); }
             if (d.TryGetValue("updateCheck", out v)) { if (v is bool) UpdateCheck = (bool)v; else warnings.Add("updateCheck"); }
+            if (d.TryGetValue("activityLog", out v)) { if (v is bool) ActivityLog = (bool)v; else warnings.Add("activityLog"); }
             if (d.TryGetValue("access", out v))
             {
                 string a = NormaliseAccess(v);
@@ -166,6 +169,7 @@ namespace BitwardenMcpSettings
             sb.Append("  \"revealSeconds\": ").Append(N(RevealSeconds)).Append(",\n");
             sb.Append("  \"clipboardClearSeconds\": ").Append(N(ClipboardClearSeconds)).Append(",\n");
             sb.Append("  \"updateCheck\": ").Append(B(UpdateCheck)).Append(",\n");
+            sb.Append("  \"activityLog\": ").Append(B(ActivityLog)).Append(",\n");
             sb.Append("  \"theme\": ").Append(Json.Quote(Theme)).Append(",\n");
             sb.Append("  \"animations\": ").Append(Json.Quote(Animations));
             JavaScriptSerializer js = new JavaScriptSerializer();

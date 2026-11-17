@@ -124,14 +124,20 @@ function icon(paths: string[], opts: { fill?: boolean; size?: number } = {}): SV
   } else {
     svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '1.9');
+    svg.setAttribute('stroke-width', '1.5');
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
   }
   for (const d of paths) {
     const p = document.createElementNS(SVG_NS, 'path');
     p.setAttribute('d', d);
+    // A 1.5 px line whatever size the icon is drawn at, so every glyph has the same weight.
+    if (!opts.fill) p.setAttribute('vector-effect', 'non-scaling-stroke');
     svg.append(p);
+  }
+  if (opts.size) {
+    svg.setAttribute('width', String(opts.size));
+    svg.setAttribute('height', String(opts.size));
   }
   return svg;
 }
@@ -177,13 +183,13 @@ async function openSettings(page?: string): Promise<void> {
 }
 
 /**
- * A button that shows it is working.
+ * An icon button that shows it is working.
  *
  * Every one of these ends in a call to the Bitwarden CLI, which spawns a process and can take
- * a few seconds. Without a spinner the card sits there looking identical to before the click,
- * so the button reads as broken and gets pressed again — and the log fills with the same
- * reveal three times over. `onClick` may return a promise; the spinner lasts as long as it
- * does.
+ * a few seconds. Without a visible change the card sits there looking identical to before the
+ * click, so the button reads as broken and gets pressed again — and the log fills with the same
+ * reveal three times over. So a pressed button stays held down (tinted, disabled) for as long
+ * as its promise runs, and the card's top-edge bar shows anything that takes more than a moment.
  */
 function iconButton(kind: keyof typeof ICONS, label: string, onClick: () => void | Promise<unknown>): HTMLButtonElement {
   const b = el('button', 'icon-btn');
@@ -195,42 +201,21 @@ function iconButton(kind: keyof typeof ICONS, label: string, onClick: () => void
     if (b.classList.contains('working')) return;
     const done = onClick();
     if (!done || typeof (done as Promise<unknown>).finally !== 'function') return;
-    const restore = b.firstChild;
     b.classList.add('working');
-    b.replaceChildren(spinner());
+    b.disabled = true;
+    b.setAttribute('aria-busy', 'true');
     void (done as Promise<unknown>).finally(() => {
       b.classList.remove('working');
-      // A handler that repainted the card left this button detached; there is nothing to
-      // restore it to, and doing so would resurrect a node nobody can see.
-      if (b.isConnected && restore) b.replaceChildren(restore);
+      b.disabled = false;
+      b.removeAttribute('aria-busy');
     });
   });
   return b;
 }
 
-/**
- * A small indeterminate spinner, sized like the icon it replaces: a round-capped arc that grows
- * and shrinks as it turns, over a faint track. The motion is in card.html.
- */
-function spinner(): SVGSVGElement {
-  const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('role', 'progressbar');
-  svg.setAttribute('aria-label', 'Working');
-  svg.classList.add('spin');
-  const ring = (cls: string): SVGCircleElement => {
-    const c = document.createElementNS(SVG_NS, 'circle');
-    c.setAttribute('cx', '12');
-    c.setAttribute('cy', '12');
-    c.setAttribute('r', '9');
-    c.setAttribute('stroke', 'currentColor');
-    c.setAttribute('stroke-width', '2.4');
-    c.setAttribute('class', cls);
-    return c;
-  };
-  svg.append(ring('spin-track'), ring('spin-arc'));
-  return svg;
+/** "Saving" becomes "Saving…"; a label that already ends in an ellipsis is left alone. */
+function busyText(text: string): string {
+  return /(…|\.\.\.)$/.test(text) ? text : `${text}…`;
 }
 
 function button(
@@ -252,13 +237,18 @@ function button(
     if (b.hasAttribute('disabled')) return;
     const done = onClick();
     if (!done || typeof (done as Promise<unknown>).finally !== 'function') return;
+    // Hold the width the button had, so a shorter "Saving…" does not make the row jump.
+    b.style.minWidth = `${b.offsetWidth}px`;
     b.setAttribute('disabled', 'true');
+    b.setAttribute('aria-busy', 'true');
     b.classList.add('is-busy');
-    paint(busyLabel ?? label, spinner());
+    paint(busyText(busyLabel ?? label));
     void (done as Promise<unknown>).finally(() => {
       if (!b.isConnected) return;
       b.removeAttribute('disabled');
+      b.removeAttribute('aria-busy');
       b.classList.remove('is-busy');
+      b.style.minWidth = '';
       paint(label, iconKind ? icon(ICONS[iconKind]) : undefined);
     });
   });
@@ -355,19 +345,29 @@ let demoMode = false;
 /** Preview only: calls never finish, so a screenshot can show the busy state. */
 let demoHang = false;
 
+function setBusy(delta: number): void {
+  busy += delta;
+  card.classList.toggle('busy', busy > 0);
+  if (busy > 0) card.setAttribute('aria-busy', 'true');
+  else card.removeAttribute('aria-busy');
+}
+
 function call(name: string, args: Record<string, unknown> = {}): Promise<Payload & Record<string, unknown>> {
-  if (demoMode) return demoHang ? new Promise(() => undefined) : Promise.resolve(demoCall(name, args));
+  if (demoMode) {
+    if (!demoHang) return Promise.resolve(demoCall(name, args));
+    // Preview of the busy state: the call never returns, so the card stays busy.
+    setBusy(1);
+    return new Promise(() => undefined);
+  }
   const runIt = async (): Promise<Payload & Record<string, unknown>> => {
-    busy++;
-    card.classList.add('busy');
+    setBusy(1);
     try {
       const res = (await app.callServerTool({ name, arguments: args })) as ToolResult;
       return parse(res);
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };
     } finally {
-      busy--;
-      if (busy === 0) card.classList.remove('busy');
+      setBusy(-1);
     }
   };
   const next = chain.then(runIt, runIt);
@@ -484,18 +484,26 @@ function meter(strength: Strength | undefined): HTMLElement {
 // Header
 // ---------------------------------------------------------------------------
 
-function header(title: string, subtitle?: string, pill?: { text: string; cls: string }): HTMLElement {
+/** The state shown at the right of a header: a word, with an icon only where it adds meaning. */
+type HeadState = { text: string; glyph?: keyof typeof ICONS; problem?: boolean };
+
+function stateLabel(s: HeadState): HTMLElement {
+  const span = el('span', s.problem ? 'state problem' : 'state');
+  if (s.glyph) span.append(icon(ICONS[s.glyph]));
+  span.append(document.createTextNode(s.text));
+  return span;
+}
+
+function header(title: string, subtitle?: string, state?: HeadState): HTMLElement {
   const head = el('div', 'head');
-  const mark = icon(ICONS.shield, { size: 22 });
+  const mark = icon(ICONS.shield);
   mark.classList.add('mark');
-  mark.setAttribute('stroke', 'currentColor');
-  mark.style.color = 'var(--accent)';
   head.append(mark);
   const col = el('div', 'col grow');
   col.append(el('div', 'head-title truncate', title));
   if (subtitle) col.append(el('div', 'head-sub truncate', subtitle));
   head.append(col);
-  if (pill) head.append(el('span', `pill ${pill.cls}`, pill.text));
+  if (state) head.append(stateLabel(state));
   return head;
 }
 
@@ -505,24 +513,21 @@ function header(title: string, subtitle?: string, pill?: { text: string; cls: st
 
 function renderStatus(p: Payload): Node {
   const st = p.status ?? { state: 'unconfigured' as const };
-  const map: Record<string, { pill: string; cls: string; line: string }> = {
-    no_cli: { pill: 'Unavailable', cls: 'off', line: 'The Bitwarden CLI is missing from this install.' },
-    unconfigured: { pill: 'Not set up', cls: 'off', line: 'No vault server is configured yet.' },
-    unauthenticated: { pill: 'Signed out', cls: 'warn', line: 'Sign in to reach your vault.' },
-    locked: { pill: 'Locked', cls: 'warn', line: 'Your vault is locked.' },
-    unlocked: { pill: 'Unlocked', cls: 'ok', line: 'Your vault is open.' },
+  const map: Record<string, HeadState & { line: string }> = {
+    no_cli: { text: 'Unavailable', problem: true, line: 'The Bitwarden CLI is missing from this install.' },
+    unconfigured: { text: 'Not set up', line: 'No vault server is configured yet.' },
+    unauthenticated: { text: 'Signed out', line: 'Sign in to reach your vault.' },
+    locked: { text: 'Locked', glyph: 'lock', line: 'Your vault is locked.' },
+    unlocked: { text: 'Unlocked', glyph: 'unlock', line: 'Your vault is open.' },
   };
   const info = map[st.state] ?? map.unconfigured;
 
   const out = frag();
-  const head = header('Vault', st.server ?? 'No server set', { text: info.pill, cls: info.cls });
-  const pill = head.querySelector('.pill') as HTMLElement | null;
+  const head = header('Vault', st.server ?? 'No server set', info);
+  const stateEl = head.querySelector('.state') as HTMLElement | null;
   out.append(head);
 
   const main = el('div', 'pad row');
-  const glyph = el('div', 'avatar');
-  glyph.append(icon(st.state === 'unlocked' ? ICONS.unlock : ICONS.lock));
-  main.append(glyph);
   const col = el('div', 'col grow');
   const headline = el('div', 'name', info.line);
   col.append(headline);
@@ -542,11 +547,7 @@ function renderStatus(p: Payload): Node {
         bits.push(left >= 60 ? `locks in ${Math.ceil(left / 60)} min` : `locks in under a minute`);
       } else {
         headline.textContent = 'Your vault has locked itself.';
-        glyph.replaceChildren(icon(ICONS.lock));
-        if (pill) {
-          pill.textContent = 'Locked';
-          pill.className = 'pill warn';
-        }
+        stateEl?.replaceWith(stateLabel({ text: 'Locked', glyph: 'lock' }));
         clearInterval(countdown);
       }
     }
@@ -632,7 +633,7 @@ function renderList(p: Payload): Node {
     header(
       total === 1 ? '1 item' : `${total} items`,
       p.truncated ? `showing the first ${items.length}` : p.unlocked ? 'vault unlocked' : undefined,
-      p.unlocked ? { text: 'Unlocked', cls: 'ok' } : undefined,
+      p.unlocked ? { text: 'Unlocked', glyph: 'unlock' } : undefined,
     ),
   );
   if (!items.length) {
@@ -649,7 +650,7 @@ function renderList(p: Payload): Node {
     const sub = [it.username, (it.uris ?? it.sites ?? []).map(hostOf)[0]].filter(Boolean).join(' · ');
     if (sub) col.append(el('div', 'list-sub truncate', sub));
     row.append(col);
-    if (it.inTrash) row.append(el('span', 'pill', 'Trash'));
+    if (it.inTrash) row.append(el('span', 'tag', 'In trash'));
     const chev = el('span', 'chev');
     chev.append(icon(ICONS.chevron));
     row.append(chev);
@@ -691,7 +692,7 @@ function renderItem(p: Payload): Node {
     return out;
   }
 
-  out.append(header(it.inTrash ? 'In the trash' : 'Vault item', it.folder ?? undefined, p.saved ? { text: 'Saved', cls: 'ok' } : undefined));
+  out.append(header(it.inTrash ? 'In the trash' : 'Vault item', it.folder ?? undefined, p.saved ? { text: 'Saved', glyph: 'check' } : undefined));
 
   const ident = el('div', 'pad row');
   ident.append(avatar(it, 'avatar'));
@@ -713,7 +714,7 @@ function renderItem(p: Payload): Node {
 
   const fields = el('div', 'fields');
 
-  if (it.username) fields.append(plainField('User', it.username, () => void copyField(it.id, 'username'), p.canCopy !== false));
+  if (it.username) fields.append(plainField('User', it.username, () => copyField(it.id, 'username'), p.canCopy !== false));
   if (it.hasPassword) fields.append(secretField(it, 'password', 'Password', p.canCopy !== false));
   if (it.hasTotp) fields.append(totpField(it, p.canCopy !== false));
 
@@ -830,28 +831,13 @@ function totpField(it: Item, canCopy: boolean): HTMLElement {
   if (shown) {
     const code = el('span', 'totp-code', shown.value.replace(/(\d{3})(?=\d)/, '$1 '));
     wrap.append(code);
-    // A TOTP is valid for the remainder of its 30-second step; the ring shows that, and the
-    // code is dropped when it expires rather than being left on screen looking valid.
-    const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('viewBox', '0 0 24 24');
-    svg.classList.add('ring');
-    const track = document.createElementNS(SVG_NS, 'circle');
-    track.setAttribute('cx', '12');
-    track.setAttribute('cy', '12');
-    track.setAttribute('r', '9');
-    track.classList.add('track');
-    const head = document.createElementNS(SVG_NS, 'circle');
-    head.setAttribute('cx', '12');
-    head.setAttribute('cy', '12');
-    head.setAttribute('r', '9');
-    head.classList.add('head');
-    const circumference = 2 * Math.PI * 9;
-    head.setAttribute('stroke-dasharray', String(circumference));
-    svg.append(track, head);
-    wrap.append(svg);
+    // A TOTP is valid for the remainder of its 30-second step; the seconds left are shown as
+    // text, and the code is dropped when it expires rather than being left on screen looking valid.
+    const leftEl = el('span', 'totp-left');
+    wrap.append(leftEl);
     const tick = (): void => {
       const left = 30 - (Math.floor(Date.now() / 1000) % 30);
-      head.setAttribute('stroke-dashoffset', String(circumference * (1 - left / 30)));
+      leftEl.textContent = `${left} s left`;
       if (left <= 1) {
         clearTimeout(revealed.get(key)?.timer ?? 0);
         revealed.delete(key);
@@ -1052,19 +1038,9 @@ function renderConfirm(p: Payload): Node {
   out.append(header(destructive ? 'Move to trash' : 'Review changes', p.itemName ?? undefined));
 
   const ident = el('div', 'pad row');
-  const av = el('div', 'avatar');
-  if (destructive) {
-    av.append(icon(ICONS.trash));
-    av.style.background = 'var(--danger-bg)';
-    av.style.color = 'var(--danger)';
-    av.style.borderColor = 'transparent';
-  } else {
-    av.textContent = initial(p.itemName);
-  }
-  ident.append(av);
   const col = el('div', 'col grow');
   col.append(el('div', 'name truncate', p.itemName ?? 'This item'));
-  col.append(el('div', 'sub', p.title ?? (destructive ? 'Move this item to the trash?' : 'Save these changes?')));
+  col.append(el('div', destructive ? 'sub danger' : 'sub', p.title ?? (destructive ? 'Move this item to the trash?' : 'Save these changes?')));
   ident.append(col);
   out.append(ident);
 
@@ -1174,21 +1150,16 @@ function renderGenerator(p: Payload): Node {
 function renderDone(p: Payload): Node {
   const out = frag();
   out.append(header('Vault'));
-  const wrap = el('div', 'pad row');
-  const av = el('div', 'avatar');
-  av.append(icon(ICONS.check));
-  av.style.background = 'var(--bg3)';
-  av.style.color = 'var(--muted)';
-  av.style.borderColor = 'transparent';
-  wrap.append(av);
-  wrap.append(el('div', 'name grow', p.message ?? 'Done.'));
+  const wrap = el('div', 'pad lead');
+  wrap.append(icon(ICONS.check));
+  wrap.append(el('div', 'sub grow', p.message ?? 'Done.'));
   out.append(wrap);
   return out;
 }
 
 function renderError(message: string, hint?: string): Node {
   const out = frag();
-  out.append(header('Vault', undefined, { text: 'Problem', cls: 'off' }));
+  out.append(header('Vault', undefined, { text: 'Problem', problem: true }));
   const wrap = el('div', 'pad col');
   wrap.append(el('div', 'name', message));
   if (hint) wrap.append(el('div', 'sub', hint));
@@ -1198,22 +1169,9 @@ function renderError(message: string, hint?: string): Node {
 
 function renderSkeleton(): Node {
   const out = frag();
-  const head = el('div', 'head');
-  const mark = el('div', 'sk');
-  mark.style.width = '22px';
-  mark.style.height = '22px';
-  mark.style.borderRadius = '6px';
-  head.append(mark);
-  const t = el('div', 'sk');
-  t.style.width = '90px';
-  head.append(t);
-  out.append(head);
+  // The real header, so the only thing that changes when the content lands is the content.
+  out.append(header('Vault', 'Loading…'));
   const pad = el('div', 'pad row');
-  const av = el('div', 'sk');
-  av.style.width = '40px';
-  av.style.height = '40px';
-  av.style.borderRadius = '11px';
-  pad.append(av);
   const col = el('div', 'col grow');
   const a = el('div', 'sk');
   a.style.width = '55%';
@@ -1325,16 +1283,27 @@ function render(p: Payload): void {
         node = p.status ? renderStatus(p) : renderError(String(p.error ?? 'Nothing to show.'), p.hint);
     }
   }
+  const bannerIsNew = Boolean(p.update) && !knownUpdate;
   if (p.update) knownUpdate = p.update;
   if (p.motion) document.documentElement.dataset.motion = p.motion;
   if (typeof p.canOpenSettings === 'boolean') settingsAvailable = p.canOpenSettings;
   const top = knownUpdate ? updateBanner(knownUpdate) : null;
+  if (top && bannerIsNew) top.classList.add('fresh');
   if (top) body.replaceChildren(top, node);
   else body.replaceChildren(node);
-  body.classList.add('fade-in');
+  // A short fade when the card moves to a different view. A repaint of the same view (a value
+  // revealed, a code expiring) changes in place, with nothing moving.
+  const viewKey = p.view ?? (p.error ? 'error' : 'status');
+  if (viewKey !== shownView) {
+    shownView = viewKey;
+    body.classList.remove('fade-in');
+    void body.offsetWidth;
+    body.classList.add('fade-in');
+  }
   notifySize();
 }
 
+let shownView: string | null = null;
 let knownUpdate: Payload['update'] | null = null;
 let settingsAvailable = false;
 
@@ -1454,7 +1423,7 @@ void (async () => {
     const payload = demoPayload(demo);
     // ?update shows the banner a newer release puts on every view; ?motion sets the user's
     // animation choice the way the server would pass it.
-    if (params.has('update')) payload.update = { current: '0.4.0', latest: '0.4.1', url: 'https://github.com/ShadowsDistant/Vaultwarden-MCP/releases' };
+    if (params.has('update')) payload.update = { current: '0.4.1', latest: '0.4.2', url: 'https://github.com/ShadowsDistant/Vaultwarden-MCP/releases' };
     const motion = params.get('motion');
     if (motion === 'on' || motion === 'off' || motion === 'system') payload.motion = motion;
     render(payload);
@@ -1530,7 +1499,7 @@ function demoPayload(kind: string): Payload {
   const item: Item = {
     id: '11111111-2222-3333-4444-555555555555',
     name: 'GitHub',
-    username: 'shadowsdistant',
+    username: 'alex.morgan',
     uris: ['https://github.com/login'],
     folder: 'Development',
     favorite: true,
@@ -1541,17 +1510,17 @@ function demoPayload(kind: string): Payload {
   };
   switch (kind) {
     case 'item':
-      return { view: 'item', itemId: item.id, item, canCopy: true, iconBase: 'https://bitwarden.pikapod.net' };
+      return { view: 'item', itemId: item.id, item, canCopy: true, iconBase: 'https://vault.example.com' };
     case 'list':
       return {
         view: 'list',
-        iconBase: 'https://bitwarden.pikapod.net',
+        iconBase: 'https://vault.example.com',
         count: 4,
         total: 4,
         items: [
           item,
-          { id: 'a', name: 'Proton Mail', username: 'shado@proton.me', uris: ['https://account.proton.me'], hasPassword: true },
-          { id: 'b', name: 'Steam', username: 'shado', uris: ['https://store.steampowered.com'], hasPassword: true, hasTotp: true },
+          { id: 'a', name: 'Proton Mail', username: 'alex@proton.me', uris: ['https://account.proton.me'], hasPassword: true },
+          { id: 'b', name: 'Steam', username: 'alexm', uris: ['https://store.steampowered.com'], hasPassword: true, hasTotp: true },
           { id: 'c', name: 'Old router', username: 'admin', hasPassword: true, inTrash: true },
         ],
       };
@@ -1560,7 +1529,7 @@ function demoPayload(kind: string): Payload {
         view: 'draft',
         draftId: 'demo',
         mode: 'create',
-        fields: { name: 'Fastmail', username: 'shado@fastmail.com', uri: 'https://app.fastmail.com', folderId: null },
+        fields: { name: 'Fastmail', username: 'alex@fastmail.com', uri: 'https://app.fastmail.com', folderId: null },
         folders: [
           { id: '1', name: 'Development' },
           { id: '2', name: 'Personal' },
@@ -1574,7 +1543,7 @@ function demoPayload(kind: string): Payload {
         itemName: 'GitHub',
         title: 'Save these changes?',
         rows: [
-          { label: 'Username', before: 'shadowsdistant', after: 'shado@github' },
+          { label: 'Username', before: 'alex.morgan', after: 'alex@example.com' },
           { label: 'Folder', before: 'No folder', after: 'Development' },
         ],
       };
@@ -1594,19 +1563,19 @@ function demoPayload(kind: string): Payload {
     case 'generator':
       return { view: 'generator', meta: { kind: 'password' }, generatedId: 'demo', options: { length: 20, special: true } };
     case 'locked':
-      return { view: 'status', status: { state: 'locked', server: 'bitwarden.pikapod.net', email: 'shado@example.com' }, canPrompt: true, canOpenSettings: true };
+      return { view: 'status', status: { state: 'locked', server: 'vault.example.com', email: 'alex@example.com' }, canPrompt: true, canOpenSettings: true };
     case 'unconfigured':
       return { view: 'status', status: { state: 'unconfigured' }, canOpenSettings: true };
     case 'signin':
       return { view: 'status', status: { state: 'unauthenticated', server: 'vault.bitwarden.com' }, canPrompt: true, canOpenSettings: true };
     default:
       return {
-        iconBase: 'https://bitwarden.pikapod.net',
+        iconBase: 'https://vault.example.com',
         view: 'status',
         status: {
           state: 'unlocked',
-          server: 'bitwarden.pikapod.net',
-          email: 'shado@example.com',
+          server: 'vault.example.com',
+          email: 'alex@example.com',
           lastSync: new Date(Date.now() - 240_000).toISOString(),
           autoLockMinutes: 15,
           locksInSeconds: 720,

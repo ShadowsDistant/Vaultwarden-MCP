@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import * as activity from './activity.js';
 import { BwError } from './bw.js';
 import { CONFIG, PRODUCT, readConfig } from './config.js';
 import { clipboardAvailable, copySecret } from './clipboard.js';
@@ -15,7 +16,7 @@ import { approved, decide, remember, type SecretField } from './policy.js';
 import { confirm, PromptError, dialogsAvailable } from './prompt.js';
 import { envelope, isUuid, Sanitizer } from './sanitize.js';
 import * as session from './session.js';
-import { current as settingsState, idleMinutes, itemOnTrustedSite, settings as settingsNow, trashAllowed } from './settings.js';
+import { current as settingsState, hostOfUri, idleMinutes, itemOnTrustedSite, settings as settingsNow, trashAllowed } from './settings.js';
 import { launchSettingsApp, settingsAppAvailable, type SettingsPage } from './settingsapp.js';
 import { takeNotice, updateAvailable, noticeText } from './updates.js';
 import * as vault from './vault.js';
@@ -124,8 +125,64 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
+/**
+ * Which tool calls go in the activity log, and as what. Tools the assistant calls are its own
+ * doing; `vault_ui_*` tools can only be called by a card, so they are the user's clicks. Pure
+ * look-ups that touch no item (status, folders, the card refreshing itself) are left out: they
+ * would bury the entries that matter.
+ */
+const ACTIVITY: Record<string, { actor: activity.Actor; action: string }> = {
+  vault_login: { actor: 'assistant', action: 'sign_in' },
+  vault_unlock: { actor: 'assistant', action: 'unlock' },
+  vault_lock: { actor: 'assistant', action: 'lock' },
+  vault_sync: { actor: 'assistant', action: 'sync' },
+  vault_open_settings: { actor: 'assistant', action: 'open_settings' },
+  vault_search: { actor: 'assistant', action: 'search' },
+  vault_get_item: { actor: 'assistant', action: 'view_item' },
+  vault_copy_secret: { actor: 'assistant', action: 'copy_secret' },
+  vault_reveal_secret: { actor: 'assistant', action: 'read_secret' },
+  vault_generate_password: { actor: 'assistant', action: 'generate_password' },
+  vault_create_login: { actor: 'assistant', action: 'propose_create' },
+  vault_edit_item: { actor: 'assistant', action: 'propose_edit' },
+  vault_trash_item: { actor: 'assistant', action: 'propose_trash' },
+  vault_restore_item: { actor: 'assistant', action: 'propose_restore' },
+  vault_ui_reveal: { actor: 'you', action: 'reveal' },
+  vault_ui_copy: { actor: 'you', action: 'copy' },
+  vault_ui_copy_value: { actor: 'you', action: 'copy' },
+  vault_ui_generate: { actor: 'you', action: 'generate_password' },
+  vault_ui_save_draft: { actor: 'you', action: 'apply_change' },
+  vault_ui_confirm: { actor: 'you', action: 'apply_change' },
+  vault_ui_cancel: { actor: 'you', action: 'cancel_change' },
+  vault_ui_unlock: { actor: 'you', action: 'unlock' },
+  vault_ui_lock: { actor: 'you', action: 'lock' },
+  vault_ui_sync: { actor: 'you', action: 'sync' },
+  vault_ui_open_settings: { actor: 'you', action: 'open_settings' },
+};
+
+/** The short, user-facing error a failed result carries. Never raw CLI output. */
+function errorOf(r: CallToolResult): string | undefined {
+  const first = r.content?.[0];
+  if (!first || first.type !== 'text') return undefined;
+  try {
+    const parsed = JSON.parse(first.text) as { error?: unknown };
+    return typeof parsed.error === 'string' ? parsed.error : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Runs a tool body and turns every throw into a structured, non-leaking result. */
 async function run(name: string, body: () => Promise<CallToolResult>): Promise<CallToolResult> {
+  const spec = ACTIVITY[name];
+  if (!spec) return runTool(name, body);
+  return activity.track({ actor: spec.actor, action: spec.action }, async (finish) => {
+    const r = await runTool(name, body);
+    finish(r.isError !== true, r.isError ? errorOf(r) : undefined);
+    return r;
+  });
+}
+
+async function runTool(name: string, body: () => Promise<CallToolResult>): Promise<CallToolResult> {
   const t0 = Date.now();
   try {
     const r = await withTimeout(body(), TOOL_TIMEOUT_MS, name);
@@ -363,13 +420,17 @@ async function authorize(raw: vault.BwItem, field: SecretField, purpose: 'chat' 
     throw new ToolError('Too many requests for secrets in the last minute.', 'This limit is deliberate. Wait a minute and ask again.');
   }
   const s = settingsNow();
+  activity.noteItem(raw);
+  activity.note({ field });
   const d = decide(raw, field, s, approved);
   if (d.kind === 'deny') {
     log.audit('secret_refused', { itemId: raw.id, field, purpose, rule: d.code });
+    activity.note({ outcome: 'refused' });
     throw new ToolError(d.message, d.hint);
   }
   if (d.kind === 'allow') {
     log.audit('secret_allowed', { itemId: raw.id, field, purpose, via: d.via });
+    activity.note({ outcome: 'allowed', via: d.via });
     return d.via;
   }
   if (!dialogsAvailable()) {
@@ -397,11 +458,32 @@ async function authorize(raw: vault.BwItem, field: SecretField, purpose: 'chat' 
         );
   if (!allowed) {
     log.audit('secret_declined', { itemId: raw.id, field, purpose });
+    activity.note({ outcome: 'declined', via: 'dialog' });
     throw new ToolError('The user declined.', 'Do not ask again unless they bring it up.');
   }
   if (s.access === 'session') remember(raw.id, field);
   log.audit('secret_allowed', { itemId: raw.id, field, purpose, via: 'dialog' });
+  activity.note({ outcome: 'allowed', via: 'dialog' });
   return 'dialog';
+}
+
+/**
+ * Names a staged change in the activity log: what kind it was and which item, from memory only.
+ * A cancel must not cost a CLI call just to be logged, so an item that has dropped out of the
+ * cache is logged by id.
+ */
+function noteAction(action: pending.Pending): void {
+  const kind = action.kind === 'delete' ? 'trash' : action.kind;
+  const fields = action.kind === 'edit' ? Object.keys(action.payload).map((k) => (k === 'folderId' ? 'folder' : k)) : undefined;
+  activity.note({ outcome: kind, fields });
+  if (action.kind === 'create') {
+    const p = action.payload as { name?: unknown; uri?: unknown };
+    activity.noteItem({ id: '', name: String(p.name ?? ''), login: { uris: p.uri ? [{ uri: String(p.uri) }] : [] } });
+  } else if (action.itemId) {
+    const known = vault.cachedItem(action.itemId);
+    if (known) activity.noteItem(known);
+    else activity.noteId(action.itemId);
+  }
 }
 
 type Row = { label: string; before?: string; after?: string };
@@ -510,6 +592,7 @@ export function registerTools(server: McpServer): void {
       run('vault_login', async () => {
         const before = await session.status();
         if (before.state === 'unlocked') {
+          activity.skip();
           const { model, view } = await statusView();
           return reply(envelope(model, [], { signedIn: true }), view);
         }
@@ -518,6 +601,7 @@ export function registerTools(server: McpServer): void {
           (before.state === 'unconfigured' || before.state === 'unauthenticated') &&
           openSettingsApp(before.state === 'unconfigured' ? 'welcome' : 'account').opened
         ) {
+          activity.note({ outcome: 'opened_settings' });
           const { model, view } = await statusView();
           return reply(
             envelope(model, [], {
@@ -563,6 +647,8 @@ export function registerTools(server: McpServer): void {
           (before.state === 'unconfigured' || before.state === 'unauthenticated') &&
           openSettingsApp(before.state === 'unconfigured' ? 'welcome' : 'account').opened
         ) {
+          activity.rename('sign_in');
+          activity.note({ outcome: 'opened_settings' });
           const { model, view } = await statusView();
           return reply(
             envelope(model, [], { hint: `Not signed in yet. ${PRODUCT} Settings is open on the user's desktop for them to sign in; ask them to tell you when they are done.` }),
@@ -689,6 +775,8 @@ export function registerTools(server: McpServer): void {
         // addresses, and a single search that returned fifty of them would be the one
         // genuinely useful thing for an attacker to talk the model into fetching.
         const list = items.map((i) => vault.toModelItem(i, folders, s));
+        // What was looked for, in the assistant's words, and a site as its host only.
+        activity.note({ query: args.query ?? (args.url ? hostOfUri(args.url) : undefined), count: list.length, ...(args.include_trash ? { outcome: 'trash' } : {}) });
         const data = { count: list.length, truncated, items: list };
         return reply(envelope(data, s.warnings), {
           view: 'list',
@@ -893,6 +981,7 @@ export function registerTools(server: McpServer): void {
         requireChangesAllowed();
         await requireReady();
         if (args.folder_id && !isUuid(args.folder_id)) throw new ToolError('That is not a folder id.', 'Use vault_list_folders.');
+        activity.noteItem({ id: '', name: args.name, login: { uris: args.uri ? [{ uri: args.uri }] : [] } });
         const password = await vault.generate({ length: 20, special: true, passphrase: args.passphrase });
         const folders = await vault.listFolders();
         const folder = folders.find((f) => f.id === args.folder_id);
@@ -920,7 +1009,10 @@ export function registerTools(server: McpServer): void {
             confirmLabel: 'Save',
             note: 'A strong password will be generated and copied to your clipboard.',
           });
-          if (!yes) return ok(envelope({ ...summary, saved: false }, s.warnings, { hint: 'The user declined. Nothing was saved.' }));
+          if (!yes) {
+            activity.note({ outcome: 'declined' });
+            return ok(envelope({ ...summary, saved: false }, s.warnings, { hint: 'The user declined. Nothing was saved.' }));
+          }
           const created = await vault.createLogin({
             name: args.name,
             username: args.username,
@@ -930,6 +1022,8 @@ export function registerTools(server: McpServer): void {
             notes: args.notes,
             favorite: args.favorite,
           });
+          activity.noteItem(created);
+          activity.note({ outcome: 'confirmed' });
           const c = await copySecret(password, `new password for item ${created.id}`);
           return ok(
             envelope({ ...summary, saved: true, itemId: created.id, passwordCopied: c.ok, clearsInSeconds: c.clearsInSeconds }, s.warnings, {
@@ -953,6 +1047,7 @@ export function registerTools(server: McpServer): void {
           },
           rows,
         );
+        activity.note({ outcome: 'staged' });
         return reply(
           envelope({ ...summary, draftId: draft.id, saved: false }, s.warnings, {
             hint: 'Nothing has been saved yet. The user reviews the card and presses Save. Tell them so, and do not claim the item exists until they do.',
@@ -1010,6 +1105,7 @@ export function registerTools(server: McpServer): void {
           patch.folderId = rest.folder_id;
         }
         if (Object.keys(patch).length === 0) throw new ToolError('Nothing to change.', 'Pass at least one field.');
+        activity.note({ fields: Object.keys(patch).map((k) => (k === 'folderId' ? 'folder' : k)) });
 
         const current = await vault.getRawItem(id);
         const folders = await vault.listFolders();
@@ -1047,12 +1143,17 @@ export function registerTools(server: McpServer): void {
 
         if (!cardsActive) {
           const yes = await confirmInWindow('Save these changes?', current.name, rows, { confirmLabel: 'Save changes', note: trustNote });
-          if (!yes) return ok(envelope({ ...summary, applied: false }, s.warnings, { hint: 'The user declined. Nothing was changed.' }));
+          if (!yes) {
+            activity.note({ outcome: 'declined' });
+            return ok(envelope({ ...summary, applied: false }, s.warnings, { hint: 'The user declined. Nothing was changed.' }));
+          }
           await vault.editItem(id, patch);
+          activity.note({ outcome: 'confirmed' });
           return ok(envelope({ ...summary, applied: true }, s.warnings));
         }
 
         const action = pending.create('edit', patch as Record<string, unknown>, rows, id);
+        activity.note({ outcome: 'staged' });
         return reply(
           envelope({ ...summary, actionId: action.id, applied: false }, s.warnings, {
             hint: 'Nothing has been written yet. The user confirms in the card. Do not say the item was changed until they do.',
@@ -1102,12 +1203,17 @@ export function registerTools(server: McpServer): void {
             danger: true,
             note: 'The server keeps trashed items for 30 days.',
           });
-          if (!yes) return ok(envelope({ ...summary, applied: false }, s.warnings, { hint: 'The user declined. Nothing was moved.' }));
+          if (!yes) {
+            activity.note({ outcome: 'declined' });
+            return ok(envelope({ ...summary, applied: false }, s.warnings, { hint: 'The user declined. Nothing was moved.' }));
+          }
           await vault.trashItem(args.id);
+          activity.note({ outcome: 'confirmed' });
           return ok(envelope({ ...summary, applied: true }, s.warnings));
         }
 
         const action = pending.create('delete', {}, [{ label: 'Item', after: current.name }, ...rows], args.id);
+        activity.note({ outcome: 'staged' });
         return reply(
           envelope({ ...summary, actionId: action.id, applied: false }, s.warnings, { hint: 'Nothing has been deleted. The user confirms in the card.' }),
           {
@@ -1137,7 +1243,9 @@ export function registerTools(server: McpServer): void {
       run('vault_restore_item', async () => {
         requireChangesAllowed();
         await requireReady();
+        if (isUuid(args.id)) activity.noteId(args.id);
         await vault.restoreItem(args.id);
+        activity.note({ outcome: 'applied' });
         const { item, warnings } = await modelItemById(args.id);
         return reply(envelope(item, warnings, { restored: true }), { view: 'item', itemId: item.id, item });
       }),
@@ -1214,6 +1322,7 @@ export function registerTools(server: McpServer): void {
       run('vault_ui_reveal', async () => {
         await requireReady();
         const a = args as unknown as { id: string; field: SecretField };
+        activity.note({ field: a.field });
         if (!cardRevealLimit.take()) throw new ToolError('Too many reveals in the last minute. Wait a moment.');
         const raw = await vault.getRawItem(a.id);
         // A re-prompt item asks for the master password again even inside the card. That flag
@@ -1238,6 +1347,7 @@ export function registerTools(server: McpServer): void {
       run('vault_ui_copy', async () => {
         await requireReady();
         const a = args as unknown as { id: string; field: SecretField | 'username' };
+        activity.note({ field: a.field });
         const raw = await vault.getRawItem(a.id);
         let value: string;
         if (a.field === 'username') {
@@ -1264,6 +1374,9 @@ export function registerTools(server: McpServer): void {
     async (args) =>
       run('vault_ui_copy_value', async () => {
         const a = args as unknown as { value: string; label?: string };
+        // The value is one the card already held, such as a freshly generated password. It is
+        // never written down; the log only says that something generated was copied.
+        activity.note({ outcome: 'generated' });
         const r = await copySecret(a.value, a.label ?? 'generated value');
         if (!r.ok) throw new ToolError('Could not reach the clipboard on this system.');
         const payload = { copied: a.label ?? 'value', clearsInSeconds: r.clearsInSeconds };
@@ -1340,6 +1453,8 @@ export function registerTools(server: McpServer): void {
           notes?: string;
           favorite?: boolean;
         };
+        activity.note({ outcome: 'create' });
+        activity.noteItem({ id: '', name: a.name, login: { uris: a.uri ? [{ uri: a.uri }] : [] } });
         const draft = pending.claim(a.draft_id);
         if (!draft || draft.kind !== 'create') throw new ToolError('That draft has expired.', 'Ask the assistant to start the new item again.');
         const created = await vault.createLogin({
@@ -1351,6 +1466,7 @@ export function registerTools(server: McpServer): void {
           notes: a.notes,
           favorite: a.favorite,
         });
+        activity.noteItem(created);
         const folders = await vault.listFolders(true);
         const item = vault.toCardItem(created, folders);
         const payload = { view: 'item', itemId: created.id, item, saved: true, canCopy: clipboardAvailable(), iconBase: iconOrigin() };
@@ -1365,6 +1481,7 @@ export function registerTools(server: McpServer): void {
       const a = args as unknown as { action_id: string };
       const action = pending.claim(a.action_id);
       if (!action) throw new ToolError('That request has expired.', 'Ask the assistant to try the change again.');
+      noteAction(action);
       if (action.kind === 'edit' && action.itemId) {
         const saved = await vault.editItem(action.itemId, action.payload as vault.ItemPatch);
         const folders = await vault.listFolders();
@@ -1385,6 +1502,8 @@ export function registerTools(server: McpServer): void {
   appTool('vault_ui_cancel', 'Card: the user dismissed a pending change.', { action_id: z.string() }, async (args) =>
     run('vault_ui_cancel', async () => {
       const a = args as unknown as { action_id: string };
+      const action = pending.peek(a.action_id);
+      if (action) noteAction(action);
       pending.cancel(a.action_id);
       const payload = { view: 'done', kind: 'cancelled', message: 'Cancelled. Nothing was changed.' };
       return ok(payload, payload);
@@ -1399,11 +1518,24 @@ export function registerTools(server: McpServer): void {
         (before.state === 'unauthenticated' || before.state === 'unconfigured') &&
         openSettingsApp(before.state === 'unconfigured' ? 'welcome' : 'account').opened
       ) {
+        activity.rename('sign_in');
+        activity.note({ outcome: 'opened_settings' });
         const { view } = await statusView();
         return ok({ ...view, openedSettings: true }, { ...view, openedSettings: true });
       }
+      if (before.state === 'unauthenticated') activity.rename('sign_in');
       const r = before.state === 'unauthenticated' ? await session.login() : await session.unlock();
       if (!r.ok) {
+        activity.note({ outcome: r.reason });
+        activity.failed(
+          r.reason === 'cancelled'
+            ? 'The window was closed.'
+            : r.reason === 'timeout'
+              ? 'The window was left unanswered.'
+              : r.reason === 'bad_password'
+                ? 'That master password was not accepted.'
+                : 'It did not work.',
+        );
         const { view } = await statusView();
         return ok({ ...view, error: r.reason }, { ...view, error: r.reason });
       }

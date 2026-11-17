@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.1 — 2026-11-17
+
+### Fixed: unlocking said "Cryptography error"
+
+The Bitwarden CLI now reports a wrong master password as a decryption failure, which showed up
+as an unexplained error. It now says the password didn't unlock the vault, and offers **Sign out
+and sign in again**, which is also the fix when the master password or two-step login was changed
+on another device since this computer last signed in.
+
+### Two-step login with an authenticator app
+
+Accounts with more than one two-step method no longer fail with "No provider selected": the
+Settings app asks for the code from your authenticator app (or lets you pick email or YubiKey),
+and a wrong or expired code is reported as such.
+
+### Activity history
+
+The Activity page now shows everything your AI assistant did with your vault: what it searched
+for, which items it looked at, which passwords and one-time codes it read or copied and whether
+you allowed it, the changes it prepared and the ones you confirmed, and sign-in and locking. It
+names the app (Claude, Cursor and so on), the item and the site, never usernames, passwords or
+codes. Filter it, search it, clear it, or switch it off. It's kept in `activity.jsonl` on this
+computer only.
+
+### Calmer look
+
+The Settings app and the vault card lose the spinners, pulsing dots and sliding animations. Busy
+buttons say what they're doing, a thin bar shows that work is in progress, and views fade in.
 ## 0.4.0 — 2026-11-17
 
 ### Fixed: the extension couldn't reach the vault inside Claude Desktop

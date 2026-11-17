@@ -178,46 +178,45 @@ namespace BitwardenMcpSettings
             return t;
         }
 
-        /** Fade in while rising a few pixels. Used for pages and welcome steps. */
+        /**
+         * A short fade in. Pages, steps and messages only ever fade: nothing slides, rises,
+         * scales or bounces, which read as busy rather than polished. `fromY` is accepted for the
+         * callers' sake and ignored.
+         */
         public static void Enter(UIElement el, double fromY)
         {
             TranslateTransform t = Translate(el);
+            t.BeginAnimation(TranslateTransform.YProperty, null);
+            t.Y = 0;
             if (!On)
             {
                 el.BeginAnimation(UIElement.OpacityProperty, null);
-                t.BeginAnimation(TranslateTransform.YProperty, null);
                 el.Opacity = 1;
-                t.Y = 0;
                 return;
             }
-            DoubleAnimation fade = new DoubleAnimation(0, 1, D(200));
+            DoubleAnimation fade = new DoubleAnimation(0, 1, D(120));
             fade.EasingFunction = Out;
-            DoubleAnimation rise = new DoubleAnimation(fromY, 0, D(220));
-            rise.EasingFunction = Out;
             el.BeginAnimation(UIElement.OpacityProperty, fade);
-            t.BeginAnimation(TranslateTransform.YProperty, rise);
         }
 
-        /** Slides an element into view from below (positive dy) or above, or back out of it. */
+        /** Shows or hides an element with a short fade. `dy` is ignored, as in Enter. */
         public static void Slide(UIElement el, bool show, double dy)
         {
             TranslateTransform t = Translate(el);
+            t.BeginAnimation(TranslateTransform.YProperty, null);
+            t.Y = 0;
             if (show)
             {
                 el.Visibility = Visibility.Visible;
                 if (!On)
                 {
                     el.BeginAnimation(UIElement.OpacityProperty, null);
-                    t.BeginAnimation(TranslateTransform.YProperty, null);
                     el.Opacity = 1;
-                    t.Y = 0;
                     return;
                 }
-                DoubleAnimation fade = new DoubleAnimation(0, 1, D(180));
-                DoubleAnimation move = new DoubleAnimation(dy, 0, D(220));
-                move.EasingFunction = Out;
+                DoubleAnimation fade = new DoubleAnimation(0, 1, D(120));
+                fade.EasingFunction = Out;
                 el.BeginAnimation(UIElement.OpacityProperty, fade);
-                t.BeginAnimation(TranslateTransform.YProperty, move);
             }
             else
             {
@@ -227,16 +226,13 @@ namespace BitwardenMcpSettings
                     el.Visibility = Visibility.Collapsed;
                     return;
                 }
-                DoubleAnimation fade = new DoubleAnimation(0, D(150));
-                DoubleAnimation move = new DoubleAnimation(dy, D(170));
-                move.EasingFunction = Out;
+                DoubleAnimation fade = new DoubleAnimation(0, D(100));
                 fade.Completed += delegate
                 {
                     // Only finish hiding if nothing asked for it back in the meantime.
                     if (el.Opacity < 0.05) el.Visibility = Visibility.Collapsed;
                 };
                 el.BeginAnimation(UIElement.OpacityProperty, fade);
-                t.BeginAnimation(TranslateTransform.YProperty, move);
             }
         }
 
@@ -266,100 +262,57 @@ namespace BitwardenMcpSettings
             target.BeginAnimation(prop, a);
         }
 
-        /** A dialog card growing slightly into place. */
+        /** A dialog fading into place. */
         public static void Pop(FrameworkElement card)
         {
             ScaleTransform s = card.RenderTransform as ScaleTransform;
-            if (s == null || s.IsFrozen)
+            if (s != null && !s.IsFrozen)
             {
-                s = new ScaleTransform();
-                card.RenderTransform = s;
+                s.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+                s.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+                s.ScaleX = s.ScaleY = 1;
             }
             if (!On)
             {
-                s.BeginAnimation(ScaleTransform.ScaleXProperty, null);
-                s.BeginAnimation(ScaleTransform.ScaleYProperty, null);
                 card.BeginAnimation(UIElement.OpacityProperty, null);
-                s.ScaleX = s.ScaleY = 1;
                 card.Opacity = 1;
                 return;
             }
-            DoubleAnimation grow = new DoubleAnimation(0.96, 1, D(200));
-            grow.EasingFunction = Out;
-            s.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
-            s.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
-            card.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, D(160)));
+            card.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, D(120)));
         }
 
         /**
-         * A busy indicator: a short arc with rounded ends turning over a faint full ring. It keeps
-         * turning even with animations off, more slowly, because a still spinner reads as a hang.
+         * The busy bar: a 2px track along the top of the content with one segment sliding across
+         * it. With animations off it is a still, full-width tint, which still says "working"
+         * without moving.
          */
-        public static FrameworkElement Spinner(double size, Brush brush)
+        public static void Busy(Border track, Border segment, bool on)
         {
-            Grid g = new Grid();
-            g.Width = size;
-            g.Height = size;
-            double stroke = Math.Max(1.6, size / 9);
-            double r = (size - stroke) / 2;
-            double c = size / 2;
-
-            Ellipse track = new Ellipse();
-            track.Stroke = brush;
-            track.StrokeThickness = stroke;
-            track.Opacity = 0.22;
-            track.Margin = new Thickness(stroke / 2);
-            g.Children.Add(track);
-
-            double sweep = 100 * Math.PI / 180;
-            PathFigure fig = new PathFigure();
-            fig.StartPoint = new Point(c, c - r);
-            fig.Segments.Add(new ArcSegment(new Point(c + r * Math.Sin(sweep), c - r * Math.Cos(sweep)), new Size(r, r), 0, false, SweepDirection.Clockwise, true));
-            PathGeometry geo = new PathGeometry();
-            geo.Figures.Add(fig);
-            Path arc = new Path();
-            arc.Data = geo;
-            arc.Stroke = brush;
-            arc.StrokeThickness = stroke;
-            arc.StrokeStartLineCap = PenLineCap.Round;
-            arc.StrokeEndLineCap = PenLineCap.Round;
-            RotateTransform spin = new RotateTransform(0, c, c);
-            arc.RenderTransform = spin;
-            g.Children.Add(arc);
-
-            DoubleAnimation turn = new DoubleAnimation(0, 360, new Duration(TimeSpan.FromMilliseconds(On ? 900 : 1800)));
-            turn.RepeatBehavior = RepeatBehavior.Forever;
-            spin.BeginAnimation(RotateTransform.AngleProperty, turn);
-            g.IsHitTestVisible = false;
-            return g;
-        }
-
-        /** A soft ring that keeps pulsing outward from a status dot while the server is running. */
-        public static void Pulse(Ellipse halo, bool run)
-        {
-            ScaleTransform s = halo.RenderTransform as ScaleTransform;
-            if (s == null || s.IsFrozen)
+            TranslateTransform t = segment.RenderTransform as TranslateTransform;
+            if (t == null || t.IsFrozen)
             {
-                s = new ScaleTransform();
-                halo.RenderTransform = s;
+                t = new TranslateTransform();
+                segment.RenderTransform = t;
             }
-            if (!run || !On)
+            t.BeginAnimation(TranslateTransform.XProperty, null);
+            track.Visibility = on ? Visibility.Visible : Visibility.Hidden;
+            if (!on) return;
+            double w = Math.Max(120, track.ActualWidth);
+            if (!On)
             {
-                halo.BeginAnimation(UIElement.OpacityProperty, null);
-                s.BeginAnimation(ScaleTransform.ScaleXProperty, null);
-                s.BeginAnimation(ScaleTransform.ScaleYProperty, null);
-                halo.Opacity = 0;
+                segment.Width = w;
+                segment.Opacity = 0.45;
+                t.X = 0;
                 return;
             }
-            Duration d = new Duration(TimeSpan.FromMilliseconds(1800));
-            DoubleAnimation grow = new DoubleAnimation(0.8, 2.4, d);
-            grow.RepeatBehavior = RepeatBehavior.Forever;
-            grow.EasingFunction = Out;
-            DoubleAnimation fade = new DoubleAnimation(0.55, 0, d);
-            fade.RepeatBehavior = RepeatBehavior.Forever;
-            s.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
-            s.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
-            halo.BeginAnimation(UIElement.OpacityProperty, fade);
+            segment.Width = Math.Round(w * 0.28);
+            segment.Opacity = 1;
+            DoubleAnimation run = new DoubleAnimation(-segment.Width, w, new Duration(TimeSpan.FromMilliseconds(1300)));
+            SineEase ease = new SineEase();
+            ease.EasingMode = EasingMode.EaseInOut;
+            run.EasingFunction = ease;
+            run.RepeatBehavior = RepeatBehavior.Forever;
+            t.BeginAnimation(TranslateTransform.XProperty, run);
         }
     }
 

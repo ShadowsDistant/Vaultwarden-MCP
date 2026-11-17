@@ -111,6 +111,8 @@ export const CONFIG = {
   sessionFile: path.join(home, 'session.json'),
   /** Touched on vault activity, so an idle lock in one process sees activity in another. */
   activityFile: path.join(home, 'activity'),
+  /** The activity log the Settings app shows: one JSON object per line, never a secret. */
+  activityLogFile: path.join(home, 'activity.jsonl'),
   /** A request from the server to the Settings app: which page to open. */
   launchRequestFile: path.join(home, 'launch-request.json'),
   /** Update check results, shared with the Settings app. */
