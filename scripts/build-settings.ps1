@@ -48,6 +48,10 @@ function Find-RefDir {
 
 $csc = Find-Csc
 $refDir = Find-RefDir
+# The .NET Framework's own C# 5 compiler builds against the runtime's assemblies, never the
+# 4.8.x targeting pack: that is what it gets on a machine without Visual Studio, which is the
+# only place it is used, and it does not build cleanly against the newer reference assemblies.
+if ($csc -like '*\Microsoft.NET\Framework*') { $refDir = $null }
 $runtime = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
 if (-not (Test-Path $runtime)) { $runtime = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319' }
 
